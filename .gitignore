@@ -1,0 +1,88 @@
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+*.manifest
+*.spec.bak
+develop-eggs/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+MANIFEST
+
+# ── Virtual environments ─────────────────────────────────────────────────────
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# ── Testing / Coverage ───────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# ── IDEs / Editors ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Secrets / Config ─────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Application runtime data (sensitive — never commit) ──────────────────────
+# The data/ folder contains the production SQLite database, supplier PDFs,
+# extracted product images and generated catalogs. Keep the folder structure
+# via .gitkeep files but exclude every other file at any depth.
+data/*
+!data/.gitkeep
+!data/*/
+data/*/*
+!data/*/.gitkeep
+
+# ── Large binary inputs (source PDFs at the repo root) ───────────────────────
+*.pdf
+!docs/**/*.pdf
+
+# ── Claude Code / agent state ────────────────────────────────────────────────
+.claude/
+
+# ── Internal documentation that should not be public ─────────────────────────
+catalog_manager_docs/
+
+# ── PyInstaller artifacts ────────────────────────────────────────────────────
+*.spec.lock
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig
