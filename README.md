@@ -9,6 +9,11 @@
 
 A production-grade Python desktop application built for a wholesale distribution business. It ingests 400+ page supplier PDFs, extracts thousands of products and their images, applies pricing rules (margins, tax, rounding), and produces both an editable Excel snapshot and a polished, customer-facing PDF catalog — all from a single dark-mode UI.
 
+![Demo — importing a supplier PDF and populating the catalog](docs/screenshots/00_demo.gif)
+
+> End-to-end flow: from an empty catalog to 3,000+ products imported, priced,
+> and ready to publish — in one pass.
+
 ---
 
 ## Table of Contents
