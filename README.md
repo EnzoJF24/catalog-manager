@@ -179,7 +179,7 @@ The app follows a strict layered architecture. Each layer only depends on the on
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/catalog-manager.git
+git clone https://github.com/EnzoJF24/catalog-manager.git
 cd catalog-manager
 
 # Create and activate a virtual environment
@@ -332,6 +332,6 @@ This project is released under the [MIT License](LICENSE).
 Python developer · Buenos Aires, Argentina
 
 - Email: enzofulcheri@gmail.com
-- GitHub: [@your-username](https://github.com/your-username)
+- GitHub: [@EnzoJF24](https://github.com/EnzoJF24)
 
 Available for freelance work — desktop applications, document-processing pipelines, business-automation tools.
