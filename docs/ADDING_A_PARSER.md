@@ -1,52 +1,32 @@
 # Adding a parser for a new supplier
 
-This guide walks through adding support for a new supplier's PDF price list.
-Once implemented, the application will auto-detect the new supplier from any
-matching PDF dropped into the Import tab — no UI changes required.
+Each supplier's PDF gets its own parser class. Once it's registered, the app recognizes that supplier's PDFs on its own when you import them. The UI and the database don't need any changes.
 
-Estimated effort:
-- **Basic parser (text only, no images):** 2–4 hours
-- **Full parser (with image extraction):** 1–2 days
+Rough effort, from my experience with the two parsers in this repo:
 
----
+- Text only (no photos): 2 to 4 hours
+- With photo extraction: 1 to 2 days
 
-## How the parser system works
+## How parsers are picked
 
-The application's PDF parsing follows a **registry + auto-detection** pattern:
+1. Each supplier has a class in `app/parsers/` that subclasses `BaseParser`.
+2. `app/parsers/parser_factory.py` keeps the list of registered parsers in `REGISTERED_PARSERS`.
+3. On import, the factory reads page 1 and checks it against each parser's `DETECTION_KEYWORDS` and `DETECTION_PATTERNS`. The first match wins.
+4. The chosen parser's `run()` returns `Product` and `ProductImage` objects, and `ProductService` saves them.
 
-1. Every supported supplier has its own parser class in `app/parsers/`,
-   subclassing `BaseParser`.
-2. The `ParserFactory` (in `app/parsers/parser_factory.py`) holds a list of
-   registered parser classes.
-3. When a user imports a PDF, the factory reads page 1 and matches its text
-   against each parser's `DETECTION_KEYWORDS` and `DETECTION_PATTERNS`. The
-   first match wins.
-4. The matched parser is instantiated and its `run()` method is called,
-   producing a list of `Product` and `ProductImage` objects that the
-   `ProductService` persists to the database.
+So adding a supplier means writing one class and adding one line to the registry.
 
-You don't need to touch the factory's matching logic, the database layer, or
-the UI. Adding a supplier is purely about writing one parser class and
-registering it.
+## Steps
 
----
+### 1. Get a sample PDF
 
-## Step-by-step
+Get at least one real PDF from the supplier, ideally two: one to build the parser and another to check it.
 
-### Step 1 — Obtain a representative PDF
+It has to be a text PDF. If it's a scan, it needs OCR first, which this guide doesn't cover.
 
-Get at least one real catalog PDF from the supplier. Ideally two: one for
-development and one for validation after the parser is working.
+### 2. Look at how the page is laid out
 
-Make sure the PDF is text-based (not a scanned image). If it's scanned, you'd
-need to OCR it first — that's outside this guide's scope.
-
-### Step 2 — Discover the PDF's structure
-
-The core technique used by every parser in this project is
-**coordinate-based column extraction**: each word in the PDF has an
-(x, y) position, and product columns occupy known x-ranges. To find those
-ranges, run this snippet against page 1:
+Every word in a PDF has a position, and usually a font. Print them for the first page:
 
 ```python
 import fitz
@@ -55,161 +35,85 @@ for w in doc[0].get_text("words")[:80]:
     print(f"x={w[0]:6.1f}  y={w[1]:6.1f}  text={w[4]!r}")
 ```
 
-Look at the output and identify which x-ranges correspond to which columns.
-A typical wholesale catalog has something like:
+From that output you can see which x-range each column uses. A typical price list looks something like this:
 
-| Column      | Approximate x-range |
-|-------------|---------------------|
-| SKU         | 30 – 100            |
-| Brand       | 100 – 220           |
-| Description | 220 – 480           |
-| Price       | 480 onwards         |
+| Column      | x-range (approx.) |
+|-------------|-------------------|
+| SKU         | 30 to 100         |
+| Brand       | 100 to 220        |
+| Description | 220 to 480        |
+| Price       | 480 and up        |
 
-Write these down — you'll plug them into the parser as constants.
+Check a few more pages. Some suppliers shift columns slightly on certain pages.
 
-### Step 3 — Copy the template
+If the columns change from table to table, fixed x-ranges won't work. In that case look at the fonts too, with `page.get_text("dict")`, which gives each span's font name and size. `ga_murdock_parser.py` works this way: it finds each table's header row by its font, reads the column positions from that header, and identifies titles, cells and prices by font instead of position.
+
+### 3. Copy the template
 
 ```bash
 cp docs/example_parser_template.py app/parsers/<supplier>_parser.py
 ```
 
-Rename the class inside (e.g. `ExampleSupplierParser` → `AcmeWholesaleParser`).
+Rename the class, for example `ExampleSupplierParser` to `AcmeWholesaleParser`.
 
-### Step 4 — Customize the constants
+### 4. Fill in the constants
 
-In the new file, replace:
+- `SUPPLIER_NAME`: the name shown in the app.
+- `DETECTION_KEYWORDS`: text that only appears in this supplier's PDFs.
+- `COL_*_MIN_X` / `COL_*_MAX_X`: the column ranges from step 2.
+- `SKU_RE`: a regex for the supplier's SKU format.
 
-- **`SUPPLIER_NAME`** — human-readable supplier name (shown in the UI).
-- **`DETECTION_KEYWORDS`** — strings unique to this supplier's PDFs.
-- **`COL_*_MIN_X` / `COL_*_MAX_X`** — column x-ranges from Step 2.
-- **`SKU_RE`** — regex describing the supplier's SKU format.
+### 5. Register it
 
-Run the discovery snippet from Step 2 a few more times against other pages
-to make sure the column ranges are stable across the catalog. Some
-suppliers shift columns slightly on certain pages — handle those edge cases
-explicitly if needed.
-
-### Step 5 — Register the parser
-
-Open `app/parsers/parser_factory.py` and add an import + registry entry:
+In `app/parsers/parser_factory.py`:
 
 ```python
 from app.parsers.acme_wholesale_parser import AcmeWholesaleParser
 
 REGISTERED_PARSERS: list[Type[BaseParser]] = [
     MayoristasIParser,
-    AcmeWholesaleParser,    # ← new entry
+    GAMurdockParser,
+    AcmeWholesaleParser,
 ]
 ```
 
-### Step 6 — Test
+### 6. Try it
 
-1. Launch the app: `python main.py`
-2. Open the **Import** tab.
-3. Drag in the supplier's PDF.
-4. Watch the logs at the bottom of the window.
+1. Run the app with `python main.py`.
+2. In **Import PDF**, click **Browse…**, pick the supplier's PDF and click **Import**.
+3. Read the import log. The second line should say `Parser: <your supplier name>`.
 
-Expected first run:
-- The parser detects the supplier correctly (status shows "Parser: Acme Wholesale")
-- Most products extract successfully
-- A handful of rows may fail — those are usually category headers or
-  exceptional rows your regex skips. They appear in the import session's
-  warnings.
+On a first run it's normal for most rows to come out right and a few to be skipped, usually category headers or rows your regex doesn't match. Skipped rows show up as notes in the import log.
 
-Open the **Products** tab to confirm the data looks right (SKUs, brands,
-prices). Edit any wrongly-parsed rows inline. Iterate on the parser code as
-needed.
+Then open **Products** and check SKUs, brands and prices. Fix the parser and import again until it's clean. Writing a few tests with small fake pages (see `tests/test_ga_murdock_parser.py`) is much faster than re-importing the whole PDF every time.
 
-### Step 7 — Add image extraction (optional)
+### 7. Photos (optional)
 
-Image extraction is significantly more complex than text extraction because
-PDFs store images separately from the text stream and you have to correlate
-them by bounding box.
+Photos are harder than text because the PDF stores them apart from the text, and you have to match each one to its row by position.
 
-For an initial release, returning `[]` from `extract_images()` is fine —
-products will simply have no images. The dashboard's "No image" health
-check will surface them, and the user can attach images manually if needed.
+For a first version you can return `[]` from `extract_images()`. Products just won't have a photo, and the dashboard's "Products without an image" check will list them.
 
-When you're ready to add image extraction, study the reference
-implementation in `app/parsers/mayoristas_i_parser.py`. Look at:
+When you add photos, look at the two existing parsers:
 
-- `_extract_image_with_bbox` — extracts an image and computes its center y
-- `_match_image_to_product` — pairs the image with the closest product row
-- `best_by_sku` — keeps only the highest-confidence match per SKU
+- `mayoristas_i_parser.py`: `_extract_image_with_bbox()` gets each image with its position, and `best_by_sku` keeps the best-scoring image for each SKU.
+- `ga_murdock_parser.py`: `extract_images()` renders one photo per product family and assigns it to every product in that family's tables. It also skips blank placeholder images.
 
-Adapt the pattern to your supplier's image placement.
+## Things that usually go wrong
 
----
+**Price formats.** `BaseParser._parse_price()` handles `1,234.56`, `$ 1.234,56` and `1234.56`. If your supplier uses something else, such as spaces as thousands separators or the currency symbol at the end, override it in your parser.
 
-## Common pitfalls
+**Categories are headers, not columns.** Most price lists put a category title above a group of products. Keep a `current_category` variable, update it whenever you hit a header (a line with no SKU and no price), and assign it to the products that follow. `mayoristas_i_parser.py` does this in `_try_extract_category()` and `_parse_page()`.
 
-### Price strings vary wildly
+**SKUs with spaces.** If a SKU like `AB 1234` is split into two words, join them before normalizing: `self._normalize_sku(" ".join(w[4] for w in sku_words))`.
 
-`BaseParser._parse_price()` handles the most common formats:
-- US: `1,234.56`
-- Argentine: `$ 1.234,56`
-- Plain: `1234.56`
+**Detection keywords that are too generic.** Words like "PRICE" or "CATALOG" will match other suppliers' PDFs too. Use something only this supplier has: their full company name, their website or an address line.
 
-If your supplier uses a different format (e.g. European spaces as thousand
-separators, currency symbols at the end), override `_parse_price()` in your
-parser class.
+**Re-imports overwrite some edits.** Re-importing updates products by SKU. `active`, `notes` and `discontinued` are kept (see `upsert_product` in `db_manager.py`), but brand and description are replaced with what's in the new PDF. If you edited a brand by hand, a re-import will undo it.
 
-### Categories live in section headers, not product rows
+## Files to look at
 
-Most catalogs intersperse category headers (e.g. "TOOLS") between product
-rows. The header is on its own line and doesn't have a SKU. The standard
-approach:
-
-1. Detect category headers as rows whose text matches `^[A-ZÁÉÍÓÚÑ\s]+$`
-   and which contain no number-like words.
-2. When you see one, store it in a `current_category` variable.
-3. Assign `current_category` to each subsequent product until the next
-   header.
-
-The `mayoristas_i_parser.py` reference implements this pattern in
-`_try_extract_category()` and `_parse_page()`.
-
-### Some SKUs span multiple words
-
-If the supplier's SKU column contains multi-word SKUs like `"AB 1234"`, the
-default whitespace-collapsing logic still works:
-`self._normalize_sku(" ".join(w[4] for w in sku_words))` produces
-`"AB 1234"` → `_normalize_sku()` uppercases and trims.
-
-If the supplier uses internal whitespace as a real character (rare), you
-need to handle this explicitly.
-
-### Detection keywords are too broad
-
-If your `DETECTION_KEYWORDS` are common English words ("PRICE", "LIST",
-"CATALOG"), the factory may pick your parser for unrelated PDFs. Be
-specific: use the supplier's full registered name, an address line,
-a website URL, a part number that's clearly theirs.
-
-### Re-imports overwrite edits
-
-By design, re-importing the same supplier PDF updates products by SKU.
-The fields `active`, `notes`, and the `discontinued` flag are preserved
-across re-imports (see `db_manager.upsert_product`). Brand and description
-are overwritten — if the user manually edited a brand and then re-imports,
-their edit will be lost. This is intentional but worth knowing.
-
----
-
-## Reference
-
-- **`app/parsers/base_parser.py`** — abstract base class with helpers
-  (`_parse_price`, `_normalize_sku`, `_normalize_text`).
-- **`app/parsers/mayoristas_i_parser.py`** — full production-grade parser,
-  including image extraction with bounding-box matching.
-- **`app/parsers/parser_factory.py`** — registry and auto-detection logic.
-- **`docs/example_parser_template.py`** — starting-point template (copy this).
-
----
-
-## Need a hand?
-
-If you're stuck adapting the parser to a specific supplier, open a
-discussion on the repo or contact the author. The PDF-parsing patterns
-used here are generalizable — most wholesale-catalog formats are some
-variant of the column-based layout described above.
+- `app/parsers/base_parser.py`: the base class and its helpers (`_parse_price`, `_normalize_sku`, `_normalize_text`).
+- `app/parsers/mayoristas_i_parser.py`: position-based parser with photo extraction.
+- `app/parsers/ga_murdock_parser.py`: font-based parser for tables whose columns change.
+- `app/parsers/parser_factory.py`: the registry and detection.
+- `docs/example_parser_template.py`: the template to copy.
