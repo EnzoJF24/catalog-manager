@@ -82,6 +82,9 @@ catalog_manager_docs/
 # ── PyInstaller artifacts ────────────────────────────────────────────────────
 *.spec.lock
 
+# ── Portfolio deliverables (screenshots / GIF exported for Upwork) ──────────
+upwork_portfolio/
+
 # ── Misc ─────────────────────────────────────────────────────────────────────
 *.bak
 *.tmp

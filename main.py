@@ -1,5 +1,5 @@
 """
-CatálogoManager Pro — Entry point.
+Catalog Manager — Entry point.
 Run: python main.py
 """
 import sys
@@ -30,9 +30,9 @@ def main():
 
     except ImportError as e:
         _show_error_dialog(
-            "Falta una dependencia",
-            f"No se pudo importar un módulo necesario:\n\n{e}\n\n"
-            f"Asegurate de tener instaladas las dependencias:\n"
+            "Missing dependency",
+            f"A required module could not be imported:\n\n{e}\n\n"
+            f"Make sure the dependencies are installed:\n"
             f"    pip install -r requirements.txt",
         )
         sys.exit(1)
@@ -47,10 +47,10 @@ def main():
         # Log the full traceback to stderr for debugging
         print(tb, file=sys.stderr)
         _show_error_dialog(
-            "Error al iniciar el sistema",
-            f"Ocurrió un error inesperado:\n\n{e}\n\n"
-            f"Revisá el archivo de log en la carpeta 'logs/' "
-            f"para más detalles.",
+            "Startup error",
+            f"An unexpected error occurred:\n\n{e}\n\n"
+            f"Check the log file in the 'logs/' folder "
+            f"for details.",
         )
         sys.exit(1)
 

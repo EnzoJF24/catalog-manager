@@ -3,7 +3,7 @@
 > Desktop application that automates the full pipeline from supplier price-list PDFs to customer-ready commercial catalogs — extraction, pricing, editing, and publishing in one tool.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-28%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen.svg)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#)
 
@@ -11,8 +11,9 @@ A production-grade Python desktop application built for a wholesale distribution
 
 ![Demo — importing a supplier PDF and populating the catalog](docs/screenshots/00_demo.gif)
 
-> End-to-end flow: from an empty catalog to 3,000+ products imported, priced,
-> and ready to publish — in one pass.
+> End-to-end flow on a 44-page US wholesale price list: 1,301 products and
+> their photos imported in 3.5 s, priced with a 30% margin, and published as
+> an Excel price list plus a 129-page branded PDF catalog.
 
 ---
 
@@ -40,7 +41,7 @@ Wholesale distributors receive massive PDF price lists from their suppliers — 
 
 This tool reduces that to **minutes**: drop in the supplier PDF, the app detects the supplier, extracts every product (SKU, brand, description, price, image), applies the configured pricing rules, and lets the user fine-tune the catalog through an inline-editable table before generating the final Excel and PDF deliverables.
 
-It is currently deployed in production for an Argentinean wholesale business and processes a 400-page, 3,000-product catalog end-to-end in under two minutes.
+It is currently deployed in production for an Argentinean wholesale business and processes a 400-page, 3,000-product catalog end-to-end in under two minutes. It also ships with a parser for a US water-treatment and plumbing supplier (English, USD), which is the catalog used in the demo and screenshots below.
 
 ---
 
@@ -82,42 +83,48 @@ It is currently deployed in production for an Argentinean wholesale business and
 ### Dashboard
 ![Dashboard](docs/screenshots/01_dashboard.png)
 
-> Live dashboard with 3,094 products from a real production catalog. Health
-> card includes a filesystem check that detects images manually deleted from
-> the extracted-images folder. The activity feed aggregates consecutive events
-> within a 5-minute window so editing sessions don't spam the log.
+> Dashboard after importing a 1,301-product US supplier catalog: last-import
+> summary with image coverage (99.6%), catalog-health checks (including a
+> filesystem check for images deleted from disk), top categories, and an
+> activity feed that collapses consecutive events within a 5-minute window.
+
+### Import with pricing rules
+![Import](docs/screenshots/05_import.png)
+
+> The supplier is detected from the PDF itself. Margin, tax, rounding and price
+> ending are previewed live before importing. Anomalies are reported as notes
+> instead of being dropped silently — here, part numbers listed in more than
+> one section and rows without a published price.
 
 ### Products — inline editing
 ![Products](docs/screenshots/02_products.png)
 
 > Inline-editable product table with batched save. Changed rows are highlighted
-> until committed. The `—` placeholder in the Brand column reflects honest
-> data: empty when the supplier's PDF didn't specify a brand, not a fallback.
+> until committed. An empty Brand cell reflects honest data: blank when the
+> supplier's PDF didn't specify a brand, not a fallback.
 
 ### Catalog generation
 ![Catalog](docs/screenshots/03_catalog.png)
 
-> The status badge tracks Excel/PDF staleness against the database. Branding,
-> colors, and product-grid density are configurable from this tab. Long-running
-> operations report progress through a non-blocking spinner.
+> The status badge tracks Excel/PDF staleness against the database. Company
+> name, tagline, colors and product-grid density are configurable, with a live
+> preview of the page layout.
 
 ### Generated PDF output
 ![PDF Output](docs/screenshots/04_pdf_output.png)
 
-> A page from a generated commercial catalog: branded header, 3×3 product
-> grid with images, descriptions, SKUs and Argentine-formatted prices.
-> Categories become section dividers across pages.
+> A page from the generated 129-page catalog: branded header, 3×3 product grid
+> with photos, SKUs, brands, descriptions and final prices in USD. Categories
+> become section dividers across pages. The reseller name is fictitious.
 
 ---
 
 ### A note on language
 
-The screenshots show the application as deployed for a Spanish-speaking
-production client. All user-facing strings are centralized in two files
-(`app/config/branding.py` and `app/ui/theme.py`), so adding English or any
-other locale is a one-day addition — no string-hunting through dozens of
-component files. This is deliberate: the architecture treats localization
-as a presentation concern, not a data concern.
+The UI, the Excel export and the PDF catalog are in English. All
+user-facing identity strings live in `app/config/branding.py`, and price
+parsing handles both US (`$1,234.56`) and Argentine (`$ 1.234,56`) formats,
+so the same pipeline serves suppliers in either market.
 
 ---
 
@@ -133,7 +140,7 @@ as a presentation concern, not a data concern.
 | Excel I/O | openpyxl with styled cells and data validation |
 | Settings | Pydantic v2 + pydantic-settings |
 | Logging | Loguru with rotating files |
-| Testing | Pytest (28 tests covering core business logic) |
+| Testing | Pytest (57 tests covering business logic and parsers) |
 | Packaging | PyInstaller spec included for single-file Windows distribution |
 
 ---
@@ -245,7 +252,8 @@ catalog_manager/
 │   ├── parsers/
 │   │   ├── base_parser.py
 │   │   ├── parser_factory.py
-│   │   └── <supplier>_parser.py
+│   │   ├── mayoristas_i_parser.py   # Argentine wholesaler (Spanish, ARS)
+│   │   └── ga_murdock_parser.py     # US supplier (English, USD)
 │   ├── services/
 │   │   ├── product_service.py
 │   │   ├── excel_service.py
@@ -271,21 +279,28 @@ pytest -q
 ```
 
 The suite covers the business-critical paths:
-- Argentine price-string parsing (`$ 1.484,90` → `1484.90`)
+- Price-string parsing in Argentine (`$ 1.484,90` → `1484.90`) and US formats
 - Margin / VAT / rounding / suffix application
 - Database upsert semantics with state preservation
 - Active / inactive / discontinued flag transitions across re-imports
 - Excel round-trip (export → edit → re-import)
 - Parser auto-detection
 - Health metrics aggregation
+- US supplier parser: dynamic table headers, wrapped descriptions, split and
+  multi-line column labels, footnote markers, category resolution
+- An end-to-end check against the real supplier PDF (every published price
+  becomes a product, almost every product gets a photo) — skipped
+  automatically when the PDF is not present, since source PDFs are git-ignored
 
-All 28 tests pass on every commit.
+All 57 tests pass on every commit.
 
 ---
 
 ## Performance
 
-Reference numbers on a 400-page, ~3,000-product supplier PDF (Intel i5, SSD):
+Reference numbers on two real supplier PDFs (Intel i5, SSD):
+
+**Argentine wholesaler — 400 pages, ~3,000 products**
 
 | Stage | Duration |
 |-------|----------|
@@ -294,6 +309,14 @@ Reference numbers on a 400-page, ~3,000-product supplier PDF (Intel i5, SSD):
 | Image extraction + binding | 60–90 s |
 | Excel generation | ~2 s |
 | Branded PDF generation | 15–30 s |
+
+**US water-treatment & plumbing supplier — 44 pages, 1,301 products**
+
+| Stage | Result |
+|-------|--------|
+| Full import (detection, extraction, photos, pricing, save) | 3.5 s |
+| Products matched to a photo | 1,296 of 1,301 (99.6%) |
+| Branded PDF catalog | 129 pages, ~10 s |
 
 The UI stays responsive throughout — all stages run on background threads with progress reporting.
 

@@ -1,13 +1,14 @@
 """
 Excel service v3:
-  Hoja 1 "Productos"  — editable por el usuario.
-                         Precio Final es un VALOR numérico (no fórmula),
-                         calculado por apply_margin() y guardado en DB.
-                         El usuario puede editar Margen%/IVA%/Precio Final
-                         directamente; al reimportar se recalcula con apply_margin().
-  Hoja 2 "Sistema"    — datos internos: imagen↔SKU, metadatos, configuración.
-  Reimport            — recalcula precio_final con apply_margin() usando los
-                         round_to/suffix persistidos en DB (fuente única de verdad).
+  Sheet 1 "Products"  — editable by the user.
+                         Final Price is a numeric VALUE (not a formula),
+                         computed by apply_margin() and stored in the DB.
+                         The user may edit Margin % / Tax % directly; on
+                         re-import the price is recalculated with apply_margin().
+  Sheet 2 "System"    — internal data: image↔SKU, metadata, configuration.
+  Reimport            — recalculates price_final with apply_margin() using the
+                         round_to/suffix persisted in the DB (single source of truth).
+                         Accepts both English headers and the legacy Spanish ones.
 """
 from __future__ import annotations
 from datetime import datetime
@@ -18,6 +19,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import (
     PatternFill, Font, Alignment, Border, Side,
 )
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -25,10 +27,11 @@ from app.database.db_manager import DatabaseManager
 from app.logging_config.logger import get_logger
 from app.config.branding import APP_NAME, APP_VERSION, APP_AUTHOR, EXCEL_SYSTEM_LABEL
 from app.config.settings import settings
+from app.utils.formatting import EXCEL_PRICE_FORMAT, parse_number
 
 log = get_logger("excel_service")
 
-TRUTHY = {"si", "sí", "yes", "true", "1", "activo", "x"}
+TRUTHY = {"yes", "y", "true", "1", "active", "x", "si", "sí", "activo"}
 
 # ── Column map for Sheet 1 ────────────────────────────────────────────────────
 COL_ACTIVO  = 1
@@ -43,10 +46,25 @@ COL_FINAL   = 9   # ← numeric value (pre-calculated), no formula
 COL_OBS     = 10
 
 HEADERS_USER = [
-    "Activo", "SKU", "Marca", "Descripción", "Categoría",
-    "Precio Original", "Margen %", "IVA %", "Precio Final",
-    "Observaciones",
+    "Active", "SKU", "Brand", "Description", "Category",
+    "Cost", "Margin %", "Tax %", "Final Price",
+    "Notes",
 ]
+
+# Re-import accepts the current headers and the legacy Spanish ones, so files
+# exported by earlier versions of the app can still be pushed back.
+HEADER_ALIASES = {
+    "active":      ("Active", "Activo"),
+    "sku":         ("SKU",),
+    "brand":       ("Brand", "Marca"),
+    "description": ("Description", "Descripción"),
+    "category":    ("Category", "Categoría"),
+    "cost":        ("Cost", "Precio Original"),
+    "margin":      ("Margin %", "Margen %"),
+    "tax":         ("Tax %", "IVA %"),
+    "final":       ("Final Price", "Precio Final"),
+    "notes":       ("Notes", "Observaciones"),
+}
 
 # ── Palette (mirrors app/ui/theme.py for Excel consistency) ──────────────────
 _RED        = "C0392B"
@@ -55,7 +73,7 @@ _DEEP_BLUE  = "0F1E36"
 _LIGHT      = "F5F5F5"
 _GREEN_BG   = "E8F8E8"
 _RED_BG     = "F8E8E8"
-_BLUE_BG    = "EBF5FB"   # Precio Final column
+_BLUE_BG    = "EBF5FB"   # Final Price column
 _GREY_TAB   = "95A5A6"
 _SYS_HDR    = "2C3E50"
 _SYS_SEC    = "1A252F"
@@ -84,6 +102,8 @@ _FONT_NOTE   = Font(italic=True, name="Calibri", size=9, color="7F8C8D")
 
 _ALIGN_C = Alignment(horizontal="center", vertical="center", wrap_text=True)
 _ALIGN_L = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+# Data rows have a fixed height: wrapping would cut long descriptions in half
+_ALIGN_ROW = Alignment(horizontal="left", vertical="center", wrap_text=False)
 _ALIGN_R = Alignment(horizontal="right",  vertical="center")
 _BORDER  = Border(
     bottom=Side(style="thin", color="DDDDDD"),
@@ -93,6 +113,11 @@ _BORDER  = Border(
 
 def _cell(ws, row: int, col: int):
     return ws.cell(row=row, column=col)
+
+
+def _safe_text(value):
+    """Strip control characters openpyxl refuses to write (e.g. NUL from PDF text)."""
+    return ILLEGAL_CHARACTERS_RE.sub("", value) if isinstance(value, str) else value
 
 
 class ExcelService:
@@ -114,21 +139,21 @@ class ExcelService:
     ) -> Path:
         rows = self.db.get_all_products(include_inactive=True)
         if not rows:
-            raise ValueError("No hay productos en la base de datos.")
+            raise ValueError("There are no products in the database.")
 
         if active_only:
             rows = [r for r in rows if r.get("active")]
         if not include_discontinued:
             rows = [r for r in rows if not r.get("discontinued")]
         if not rows:
-            raise ValueError("No hay productos que cumplan los criterios de filtro.")
+            raise ValueError("No products match the filter criteria.")
 
         rows.sort(key=lambda r: (r.get("category") or "", r.get("sku") or ""))
 
         if filename:
             out_path = self.output_dir / filename
         else:
-            base     = f"catalogo_{datetime.now().strftime('%Y-%m-%d')}"
+            base     = f"catalog_{datetime.now().strftime('%Y-%m-%d')}"
             out_path = self.output_dir / f"{base}.xlsx"
             # If a file with that date already exists, append _2, _3, … to avoid overwrite
             n = 2
@@ -138,27 +163,38 @@ class ExcelService:
 
         wb = Workbook()
         ws1 = wb.active
-        ws1.title = "Productos"
-        self._write_products_sheet(ws1, rows)
+        ws1.title = "Products"
+        self._write_products_sheet(ws1, rows, self._header_fill())
 
-        ws2 = wb.create_sheet("Sistema")
+        ws2 = wb.create_sheet("System")
         ws2.sheet_properties.tabColor = _GREY_TAB
         self._write_system_sheet(ws2, rows, round_to, suffix)
 
         wb.save(str(out_path))
-        log.info(f"Excel generado: {out_path} ({len(rows)} filas)")
+        log.info(f"Excel generated: {out_path} ({len(rows)} rows)")
         return out_path
 
     # ── Sheet 1 ───────────────────────────────────────────────────────────────
 
-    def _write_products_sheet(self, ws, rows: list[dict]):
+    def _header_fill(self) -> PatternFill:
+        """Header colour follows the catalog's primary colour (Catalog tab settings)."""
+        value = (self.db.get_setting("primary_color", "") or "").strip().lstrip("#")
+        if len(value) == 6:
+            try:
+                int(value, 16)
+                return PatternFill("solid", fgColor=value.upper())
+            except ValueError:
+                pass
+        return _FILL_HEADER
+
+    def _write_products_sheet(self, ws, rows: list[dict], header_fill: PatternFill = _FILL_HEADER):
         # ── Row 1: staleness banner (merged across all columns) ──────────────
-        gen_str = datetime.now().strftime("%d/%m/%Y a las %H:%M")
+        gen_str = datetime.now().strftime("%m/%d/%Y at %H:%M")
         banner  = _cell(ws, 1, 1)
         banner.value = (
-            f"⚠  Catálogo generado el {gen_str}. "
-            "Si hubo modificaciones posteriores en el sistema, NO están reflejadas aquí. "
-            "Para datos actualizados, generá un Excel nuevo desde la aplicación."
+            f"⚠  Catalog generated on {gen_str}. "
+            "Changes made in the app after that are NOT reflected here. "
+            "For up-to-date data, export a new Excel from the application."
         )
         banner.fill      = _FILL_BANNER
         banner.font      = _FONT_BANNER
@@ -172,26 +208,26 @@ class ExcelService:
         for col, h in enumerate(HEADERS_USER, 1):
             c            = _cell(ws, 2, col)
             c.value      = h
-            c.fill       = _FILL_HEADER
+            c.fill       = header_fill
             c.font       = _FONT_HEADER
             c.alignment  = _ALIGN_C
             c.border     = _BORDER
 
-        # Dropdown for "Activo" column
-        dv = DataValidation(type="list", formula1='"SI,NO"', allow_blank=False)
-        dv.error       = "Usá SI o NO"
-        dv.errorTitle  = "Valor inválido"
-        dv.prompt      = "SI = activo, NO = inactivo"
-        dv.promptTitle = "Estado del producto"
+        # Dropdown for "Active" column
+        dv = DataValidation(type="list", formula1='"YES,NO"', allow_blank=False)
+        dv.error       = "Use YES or NO"
+        dv.errorTitle  = "Invalid value"
+        dv.prompt      = "YES = active, NO = inactive"
+        dv.promptTitle = "Product status"
         ws.add_data_validation(dv)
 
         # ── Row 3+: data ──────────────────────────────────────────────────────
         for row_i, r in enumerate(rows, start=3):
             is_active = r.get("active", True)
 
-            # A — Activo
+            # A — Active
             c           = _cell(ws, row_i, COL_ACTIVO)
-            c.value     = "SI" if is_active else "NO"
+            c.value     = "YES" if is_active else "NO"
             c.fill      = _FILL_ACTIVE if is_active else _FILL_INACTIVE
             c.font      = Font(bold=True, name="Calibri", size=10,
                                color="1A6B3C" if is_active else "8B0000")
@@ -207,22 +243,22 @@ class ExcelService:
                 (COL_CAT,   r.get("category") or ""),
             ]:
                 c           = _cell(ws, row_i, col)
-                c.value     = val
+                c.value     = _safe_text(val)
                 c.font      = _FONT_DATA
-                c.alignment = _ALIGN_L
+                c.alignment = _ALIGN_ROW
                 c.border    = _BORDER
                 if row_i % 2 == 0 and col != COL_SKU:
                     c.fill = _FILL_ALT
 
-            # F — Precio Original
+            # F — Cost
             c               = _cell(ws, row_i, COL_ORIG)
             c.value         = round(r.get("price_original", 0.0) or 0.0, 2)
             c.font          = _FONT_DATA
             c.alignment     = _ALIGN_R
             c.border        = _BORDER
-            c.number_format = '"$ "#,##0.00'
+            c.number_format = EXCEL_PRICE_FORMAT
 
-            # G — Margen %
+            # G — Margin %
             c               = _cell(ws, row_i, COL_MARGEN)
             c.value         = round(r.get("margin_pct", 0.0) or 0.0, 2)
             c.font          = _FONT_DATA
@@ -230,7 +266,7 @@ class ExcelService:
             c.border        = _BORDER
             c.number_format = '0.00"%"'
 
-            # H — IVA %
+            # H — Tax %
             c               = _cell(ws, row_i, COL_IVA)
             c.value         = round(r.get("iva_pct", 0.0) or 0.0, 2)
             c.font          = _FONT_DATA
@@ -238,36 +274,37 @@ class ExcelService:
             c.border        = _BORDER
             c.number_format = '0.00"%"'
 
-            # I — Precio Final (numeric, pre-calculated — no live formula)
+            # I — Final Price (numeric, pre-calculated — no live formula)
             c               = _cell(ws, row_i, COL_FINAL)
             c.value         = round(r.get("price_final", 0.0) or 0.0, 2)
             c.font          = _FONT_FINAL
             c.fill          = _FILL_FINAL
             c.alignment     = _ALIGN_R
             c.border        = _BORDER
-            c.number_format = '"$ "#,##0.00'
+            c.number_format = EXCEL_PRICE_FORMAT
 
-            # J — Observaciones
+            # J — Notes
             c           = _cell(ws, row_i, COL_OBS)
-            c.value     = r.get("notes") or ""
+            c.value     = _safe_text(r.get("notes") or "")
             c.font      = _FONT_DATA
-            c.alignment = _ALIGN_L
+            c.alignment = _ALIGN_ROW
             c.border    = _BORDER
 
         # Column widths
         for col, w in {
-            COL_ACTIVO: 8, COL_SKU: 13, COL_MARCA: 18,
-            COL_DESC: 46, COL_CAT: 22, COL_ORIG: 17,
-            COL_MARGEN: 10, COL_IVA: 8, COL_FINAL: 17, COL_OBS: 30,
+            # Header widths leave room for the auto-filter dropdown arrow
+            COL_ACTIVO: 11, COL_SKU: 15, COL_MARCA: 18,
+            COL_DESC: 88, COL_CAT: 18, COL_ORIG: 13,
+            COL_MARGEN: 14, COL_IVA: 11, COL_FINAL: 17, COL_OBS: 36,
         }.items():
             ws.column_dimensions[get_column_letter(col)].width = w
 
-        # Nota explicativa debajo de los datos (data starts at row 3 now)
+        # Explanatory note below the data (data starts at row 3 now)
         help_row = len(rows) + 4
         note = _cell(ws, help_row, COL_FINAL - 2)
         note.value     = (
-            "ℹ  Precio Final es el valor calculado por el sistema. "
-            "Para recalcular usá 'Re-aplicar Margen' en Configuración."
+            "ℹ  Final Price is the value calculated by the system. "
+            "To recalculate it, use 'Re-apply margin' in Tools."
         )
         note.font      = _FONT_NOTE
         note.alignment = _ALIGN_L
@@ -315,39 +352,39 @@ class ExcelService:
 
         c2           = _cell(ws, 2, 1)
         c2.value     = (
-            f"  Generado por {APP_AUTHOR}  ·  {APP_NAME} v{APP_VERSION}  "
-            "— Esta hoja es de uso interno del sistema. No modificar."
+            f"  Generated by {APP_NAME} v{APP_VERSION}  ·  {APP_AUTHOR}  "
+            "— This sheet is for internal system use. Do not edit."
         )
         c2.font      = _FONT_NOTE
         c2.alignment = _ALIGN_L
         ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
 
         # Generation metadata
-        _section_title(4, "METADATOS DE GENERACIÓN")
-        _kv(5, "Fecha de generación:", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-        _kv(6, "Total productos:",     len(rows))
+        _section_title(4, "GENERATION METADATA")
+        _kv(5, "Generated on:",        datetime.now().strftime("%m/%d/%Y %H:%M:%S"))
+        _kv(6, "Total products:",      len(rows))
         sessions = self.db.get_sessions(limit=1)
         if sessions:
             s = sessions[0]
-            _kv(7, "Última sesión ID:",  s.get("session_id", "—"))
-            _kv(8, "Proveedor:",         s.get("supplier_name", "—"))
+            _kv(7, "Last session ID:",   s.get("session_id", "—"))
+            _kv(8, "Supplier:",          s.get("supplier_name", "—"))
             _kv(9, "Parser:",            s.get("parser_name", "—"))
 
         # Applied config
-        _section_title(11, "CONFIGURACIÓN APLICADA")
+        _section_title(11, "APPLIED CONFIGURATION")
         sample = rows[0] if rows else {}
-        _kv(12, "Margen %:",         f"{sample.get('margin_pct', 0):.2f}")
-        _kv(13, "IVA %:",            f"{sample.get('iva_pct', 0):.2f}")
-        _kv(14, "Redondear a:",      round_to if round_to else "Sin redondeo")
-        _kv(15, "Sufijo de precio:", suffix if suffix else "Ninguno")
-        _kv(16, "Precio Final:",     "Valor precalculado por el sistema (no fórmula)")
+        _kv(12, "Margin %:",         f"{sample.get('margin_pct', 0):.2f}")
+        _kv(13, "Tax %:",            f"{sample.get('iva_pct', 0):.2f}")
+        _kv(14, "Round up to:",      round_to if round_to else "No rounding")
+        _kv(15, "Price ending:",     suffix if suffix else "None")
+        _kv(16, "Final Price:",      "Pre-calculated by the system (not a formula)")
 
         # SKU ↔ image table
-        _section_title(18, "TABLA IMAGEN ↔ PRODUCTO")
+        _section_title(18, "IMAGE ↔ PRODUCT TABLE")
         img_headers = [
-            "SKU", "Ruta de Imagen", "Imagen existe",
-            "Marca", "Categoría", "Primera vez visto",
-            "Última importación", "ID Sesión",
+            "SKU", "Image Path", "Image Exists",
+            "Brand", "Category", "First Seen",
+            "Last Import", "Session ID",
         ]
         for col, h in enumerate(img_headers, 1):
             c           = _cell(ws, 19, col)
@@ -361,11 +398,11 @@ class ExcelService:
         for row_i, r in enumerate(rows, start=20):
             img_path = r.get("image_path") or ""
             if not img_path:
-                img_ok = "— sin imagen"
+                img_ok = "— no image"
             elif settings.resolve_path(img_path).exists():
                 img_ok = "✓"
             else:
-                img_ok = "⚠ archivo no encontrado"
+                img_ok = "⚠ file not found"
 
             vals = [
                 r.get("sku", ""),
@@ -379,7 +416,7 @@ class ExcelService:
             ]
             for col, val in enumerate(vals, 1):
                 c           = _cell(ws, row_i, col)
-                c.value     = val
+                c.value     = _safe_text(val)
                 c.font      = _FONT_SYS
                 c.alignment = _ALIGN_L
                 c.border    = _BORDER
@@ -398,7 +435,7 @@ class ExcelService:
         Price recalculation uses apply_margin() with the persisted round_to / suffix
         from each product's DB row — single source of truth (C1 fix).
         """
-        log.info(f"Reimportando Excel: {excel_path}")
+        log.info(f"Re-importing Excel: {excel_path}")
         results = {
             "processed": 0, "updated": 0,
             "not_found": [], "duplicates": [], "errors": [], "warnings": [],
@@ -407,7 +444,7 @@ class ExcelService:
         try:
             wb = load_workbook(str(excel_path), data_only=True)
         except Exception as e:
-            results["errors"].append(f"Error abriendo Excel: {e}")
+            results["errors"].append(f"Could not open Excel: {e}")
             return results
 
         ws = wb.worksheets[0]
@@ -421,12 +458,16 @@ class ExcelService:
                 break
 
         header_row = [c.value for c in ws[header_row_idx]]
-        col_map    = {h: i + 1 for i, h in enumerate(header_row) if h}
+        by_header  = {str(h).strip(): i + 1 for i, h in enumerate(header_row) if h}
+        # Canonical key → column index, whichever alias the file uses
+        col_map = {
+            key: next((by_header[a] for a in aliases if a in by_header), None)
+            for key, aliases in HEADER_ALIASES.items()
+        }
 
-        required = {"SKU", "Activo"}
-        missing  = required - set(col_map)
+        missing = [HEADER_ALIASES[k][0] for k in ("sku", "active") if col_map[k] is None]
         if missing:
-            results["errors"].append(f"Columnas requeridas faltantes: {missing}")
+            results["errors"].append(f"Missing required columns: {missing}")
             return results
 
         all_rows: list[dict] = []
@@ -435,20 +476,20 @@ class ExcelService:
                 idx = col_map.get(col_name)
                 return row[idx - 1] if idx else default
 
-            sku = str(_get("SKU") or "").strip().upper()
+            sku = str(_get("sku") or "").strip().upper()
             if not sku:
                 continue
             all_rows.append({
-                "sku":           sku,
-                "activo":        str(_get("Activo", "SI") or "SI"),
-                "marca":         _get("Marca"),
-                "descripcion":   _get("Descripción"),
-                "observaciones": _get("Observaciones"),
-                "precio_orig":   _get("Precio Original"),
-                "margen_pct":    _get("Margen %"),
-                "iva_pct":       _get("IVA %"),
-                "precio_final":  _get("Precio Final"),
-                "categoria":     _get("Categoría"),
+                "sku":         sku,
+                "active":      str(_get("active", "YES") or "YES"),
+                "brand":       _get("brand"),
+                "description": _get("description"),
+                "notes":       _get("notes"),
+                "cost":        _get("cost"),
+                "margin_pct":  _get("margin"),
+                "iva_pct":     _get("tax"),
+                "final_price": _get("final"),
+                "category":    _get("category"),
             })
 
         # Dedup
@@ -459,7 +500,7 @@ class ExcelService:
         if dupes:
             results["duplicates"] = dupes
             results["warnings"].append(
-                f"SKUs duplicados (primera aparición usada): {dupes}"
+                f"Duplicate SKUs (first occurrence used): {dupes}"
             )
             unique: dict[str, dict] = {}
             for d in all_rows:
@@ -470,7 +511,7 @@ class ExcelService:
         for d in all_rows:
             results["processed"] += 1
             sku       = d["sku"]
-            is_active = d["activo"].strip().lower() in TRUTHY
+            is_active = d["active"].strip().lower() in TRUTHY
 
             existing = self.db.get_product(sku)
             if not existing:
@@ -481,10 +522,10 @@ class ExcelService:
 
             # Text fields
             for key, db_col in [
-                ("marca",         "brand"),
-                ("descripcion",   "description"),
-                ("observaciones", "notes"),
-                ("categoria",     "category"),
+                ("brand",       "brand"),
+                ("description", "description"),
+                ("notes",       "notes"),
+                ("category",    "category"),
             ]:
                 val = d.get(key)
                 if val is not None and str(val).strip():
@@ -493,24 +534,26 @@ class ExcelService:
             def _to_float(v) -> Optional[float]:
                 if v is None:
                     return None
+                if isinstance(v, (int, float)):
+                    return float(v)
                 try:
-                    return float(str(v).replace(",", ".").strip())
+                    return parse_number(v)
                 except (ValueError, TypeError):
                     return None
 
-            orig   = _to_float(d["precio_orig"])
-            margen = _to_float(d["margen_pct"])
+            orig   = _to_float(d["cost"])
+            margin = _to_float(d["margin_pct"])
             iva    = _to_float(d["iva_pct"])
 
             if orig   is not None: update_row["price_original"] = orig
-            if margen is not None: update_row["margin_pct"]     = margen
+            if margin is not None: update_row["margin_pct"]     = margin
             if iva    is not None: update_row["iva_pct"]        = iva
 
             # Recalculate price_final with apply_margin() using persisted round_to/suffix
             # This is the C1 fix: one code path for price calculation, always.
             from app.models.product import Product
             _orig   = orig   if orig   is not None else (existing.get("price_original") or 0.0)
-            _margen = margen if margen is not None else (existing.get("margin_pct")     or 0.0)
+            _margin = margin if margin is not None else (existing.get("margin_pct")     or 0.0)
             _iva    = iva    if iva    is not None else (existing.get("iva_pct")        or 0.0)
             _rnd    = existing.get("round_to_nearest") or 0
             _sfx    = existing.get("price_suffix") or ""
@@ -518,7 +561,7 @@ class ExcelService:
             p = Product(
                 sku=sku, brand="", description="", price_original=_orig, category=""
             )
-            p.apply_margin(_margen, _iva, _rnd, _sfx)
+            p.apply_margin(_margin, _iva, _rnd, _sfx)
             update_row["price_final"]      = p.price_final
             update_row["round_to_nearest"] = p.round_to_nearest
             update_row["price_suffix"]     = p.price_suffix
@@ -528,11 +571,11 @@ class ExcelService:
                 self.db.set_product_active(sku, is_active)
                 results["updated"] += 1
             except Exception as e:
-                results["errors"].append(f"Error actualizando {sku}: {e}")
+                results["errors"].append(f"Error updating {sku}: {e}")
 
         log.info(
-            f"Reimport: procesados={results['processed']} "
-            f"actualizados={results['updated']} "
-            f"no_encontrados={len(results['not_found'])}"
+            f"Reimport: processed={results['processed']} "
+            f"updated={results['updated']} "
+            f"not_found={len(results['not_found'])}"
         )
         return results

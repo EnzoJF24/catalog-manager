@@ -73,17 +73,17 @@ class AppController:
         self._save_margin_config()  # Persist current margin config
         path = Path(pdf_path)
         if not path.exists():
-            raise FileNotFoundError(f"PDF no encontrado: {pdf_path}")
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
         session = self.product_svc.import_pdf(
             path, self.margin_config, progress_cb, force_parser
         )
         if not session.errors:
             self._mark_db_modified()
             # Activity log: 1 import = 1 entry
-            supplier = session.supplier_name or "proveedor"
+            supplier = session.supplier_name or "supplier"
             self.db.log_activity(
                 kind="import",
-                summary=f"Importaste catálogo de {supplier} ({session.products_found} prod)",
+                summary=f"Imported {supplier} · {session.products_found:,} products",
                 count=session.products_found,
                 metadata={
                     "session_id": session.session_id,
@@ -109,7 +109,7 @@ class AppController:
             n = 0
         self.db.log_activity(
             kind="excel",
-            summary=f"Descargaste Excel ({n} prod)" + (" — solo activos" if active_only else ""),
+            summary=f"Exported Excel · {n:,} products" + (" (active only)" if active_only else ""),
             count=n,
             metadata={"file": path.name},
         )
@@ -121,7 +121,7 @@ class AppController:
         n = int(result.get("updated", 0) or 0)
         self.db.log_activity(
             kind="edit_batch",
-            summary=f"Re-importaste Excel ({n} productos actualizados)",
+            summary=f"Re-imported Excel · {n:,} products updated",
             count=n,
             metadata={"file": Path(excel_path).name, "source": "excel_reimport"},
         )
@@ -145,7 +145,7 @@ class AppController:
         n = len(products)
         self.db.log_activity(
             kind="pdf",
-            summary=f"Generaste catálogo PDF ({n} prod)" + (" — solo activos" if active_only else ""),
+            summary=f"Generated PDF catalog · {n:,} products",
             count=n,
             metadata={"file": Path(path).name if path else ""},
         )
@@ -159,7 +159,7 @@ class AppController:
     def get_products_page(
         self,
         *,
-        filter_mode: str = "Todos",
+        filter_mode: str = "All",
         search: str = "",
         health_filter: str = "",
         sku_list: list = [],        # noqa: B006
@@ -204,7 +204,7 @@ class AppController:
         self._mark_db_modified()
         self.db.log_activity(
             kind="margin_apply",
-            summary=f"Re-aplicaste margen del {self.margin_config.margin_pct:g}% a {count} productos",
+            summary=f"Re-applied {self.margin_config.margin_pct:g}% margin · {count:,} products",
             count=count,
             metadata={
                 "margin_pct": self.margin_config.margin_pct,
@@ -222,10 +222,10 @@ class AppController:
         """
         if n_saved <= 0:
             return
-        label = "1 producto" if n_saved == 1 else f"{n_saved} productos"
+        label = "1 product" if n_saved == 1 else f"{n_saved} products"
         self.db.log_activity(
             kind="edit_batch",
-            summary=f"Editaste {label}",
+            summary=f"Edited {label}",
             count=n_saved,
             metadata={"source": "inline"},
         )

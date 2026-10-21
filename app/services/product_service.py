@@ -48,7 +48,7 @@ class ProductService:
             if progress_cb:
                 progress_cb(msg, pct)
 
-        _progress("Detectando proveedor...", 5)
+        _progress("Detecting supplier...", 5)
 
         # Detect parser class before creating the output directory so we can
         # use a permanent per-supplier folder instead of a session-scoped one.
@@ -65,8 +65,8 @@ class ProductService:
         if not parser_cls:
             supported = ", ".join(p.SUPPLIER_NAME for p in REGISTERED_PARSERS)
             session.errors.append(
-                f"Este PDF no corresponde a ningún proveedor soportado. "
-                f"Proveedores soportados: {supported}."
+                f"This PDF does not match any supported supplier. "
+                f"Supported suppliers: {supported}."
             )
             session.complete()
             return session
@@ -83,18 +83,18 @@ class ProductService:
 
         # Run extraction — close the PDF file handle immediately after, before
         # any further processing, so Windows doesn't keep the file locked.
-        _progress("Extrayendo productos...", 15)
+        _progress("Extracting products...", 15)
         try:
             products, images = parser.run(session)
         finally:
             parser._close_doc()
 
         if not products:
-            session.errors.append("No se extrajeron productos.")
+            session.errors.append("No products were extracted.")
             session.complete()
             return session
 
-        _progress(f"Aplicando márgenes ({margin_config.margin_pct}%)...", 60)
+        _progress(f"Applying margins ({margin_config.margin_pct}%)...", 60)
         for p in products:
             p.apply_margin(
                 margin_config.margin_pct,
@@ -104,14 +104,15 @@ class ProductService:
             )
             p.processing_id = session.session_id
 
-        _progress("Persistiendo en base de datos...", 70)
+        _progress("Saving to database...", 70)
         self._persist_products(products, images, session)
 
-        _progress("Guardando sesión...", 90)
+        _progress("Saving session...", 90)
+        # Complete first so completed_at is persisted (the dashboard shows the duration)
+        session.complete()
         self._save_session(session)
 
-        session.complete()
-        _progress(f"✓ Completado: {len(products)} productos", 100)
+        _progress(f"✓ Done: {len(products)} products", 100)
         log.info(
             f"Import complete: session={session.session_id}, "
             f"products={session.products_found}, "
@@ -174,7 +175,7 @@ class ProductService:
         skus_seen = [p.sku for p in products]
         discontinued = self.db.mark_discontinued(skus_seen)
         if discontinued:
-            session.warnings.append(f"{discontinued} productos marcados como discontinuados")
+            session.warnings.append(f"{discontinued} products marked as discontinued")
 
     def _save_session(self, session: ProcessingSession):
         self.db.save_session({

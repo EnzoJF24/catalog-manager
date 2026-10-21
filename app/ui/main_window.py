@@ -1,5 +1,5 @@
 """
-Main window: transiciones limpias + resize responsivo + FilesFrame integrado.
+Main window: clean frame transitions + responsive resize + integrated FilesFrame.
 """
 from __future__ import annotations
 from typing import Optional
@@ -41,7 +41,7 @@ class MainWindow(ctk.CTk):
         self._build_layout()
         self._show_frame("dashboard")
 
-        # Resize responsivo: forzar re-layout cuando la ventana cambia de tamaño
+        # Responsive resize: force a re-layout when the window changes size
         self.bind("<Configure>", self._on_configure)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         log.info("Main window opened")
@@ -55,7 +55,7 @@ class MainWindow(ctk.CTk):
         self.sidebar = Sidebar(self, self._show_frame)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
 
-        # Contenedor con fondo uniforme → evita flash al cambiar solapa
+        # Uniform-background container → avoids a flash when switching tabs
         from app.ui.theme import BG_BASE
         self.content = ctk.CTkFrame(self, fg_color=BG_BASE, corner_radius=0)
         self.content.grid(row=0, column=1, sticky="nsew")
@@ -73,7 +73,7 @@ class MainWindow(ctk.CTk):
         for frame in self._frames.values():
             frame.grid(row=0, column=0, sticky="nsew")
 
-    # ── Navegación ────────────────────────────────────────────────────────────
+    # ── Navigation ────────────────────────────────────────────────────────────
 
     def _show_frame(self, name: str, **kwargs):
         """
@@ -86,10 +86,10 @@ class MainWindow(ctk.CTk):
 
         target = self._frames.get(name)
         if target is None:
-            log.warning(f"Frame desconocido: {name}")
+            log.warning(f"Unknown frame: {name}")
             return
 
-        # 1. on_hide en frame saliente (skip si ya estábamos en el mismo frame)
+        # 1. on_hide on the outgoing frame (skipped if we are already on it)
         if self._active_key and self._active_key != name:
             prev = self._frames[self._active_key]
             if hasattr(prev, "on_hide"):
@@ -98,26 +98,26 @@ class MainWindow(ctk.CTk):
                 except Exception as e:
                     log.warning(f"on_hide error ({self._active_key}): {e}")
 
-        # 2. Elevar frame y actualizar estado antes del repaint
+        # 2. Raise the frame and update state before the repaint
         target.tkraise()
         self._active_key = name
         self.sidebar.set_active(name)
         self.update_idletasks()
 
-        # 3. Diferir on_show 1 ms para que el frame repinte completamente
-        #    antes de empezar a poblar su contenido (evita artefacto visual).
+        # 3. Defer on_show by 1 ms so the frame fully repaints before its
+        #    content starts populating (avoids a visual artifact).
         self.after(1, lambda t=target, n=name, k=kwargs: self._run_on_show(t, n, k))
         log.debug(f"→ {name} {kwargs if kwargs else ''}")
 
     def _run_on_show(self, target, name: str, kwargs: dict):
         if name != self._active_key:
-            return  # El usuario navegó a otra solapa antes del repaint
+            return  # The user moved to another tab before the repaint
         if hasattr(target, "on_show"):
             try:
                 target.on_show()
             except Exception as e:
                 log.warning(f"on_show error ({name}): {e}")
-        # Apply external args (e.g., Dashboard → Productos with health_filter)
+        # Apply external args (e.g., Dashboard → Products with health_filter)
         if kwargs and hasattr(target, "apply_external_args"):
             try:
                 target.apply_external_args(**kwargs)
@@ -127,11 +127,11 @@ class MainWindow(ctk.CTk):
     # ── Resize ────────────────────────────────────────────────────────────────
 
     def _on_configure(self, event):
-        """Propaga resize a todos los frames para evitar artefactos visuales."""
+        """Propagate resize to all frames to avoid visual artifacts."""
         if event.widget is self:
             self.update_idletasks()
 
-    # ── Cierre ────────────────────────────────────────────────────────────────
+    # ── Close ─────────────────────────────────────────────────────────────────
 
     def _on_close(self):
         # Warn if ProductsFrame has unsaved inline edits
@@ -140,9 +140,9 @@ class MainWindow(ctk.CTk):
             from tkinter import messagebox
             n = len(products_frame._pending)
             ok = messagebox.askyesno(
-                "Cambios sin guardar",
-                f"Hay {n} cambio(s) sin guardar en Productos.\n"
-                "¿Cerrar de todas formas? Se perderán los cambios pendientes.",
+                "Unsaved changes",
+                f"There are {n} unsaved change(s) in Products.\n"
+                "Close anyway? Pending changes will be lost.",
             )
             if not ok:
                 return
@@ -154,5 +154,5 @@ class MainWindow(ctk.CTk):
                     frame.on_hide()
                 except Exception:
                     pass
-        log.info("Cerrando aplicación")
+        log.info("Closing application")
         self.destroy()

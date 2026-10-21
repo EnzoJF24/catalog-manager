@@ -1,1 +1,1 @@
-# CatálogoManager Pro
+# Catalog Manager

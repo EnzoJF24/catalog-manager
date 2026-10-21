@@ -1,5 +1,5 @@
 """
-Test suite for CatálogoManager Pro.
+Test suite for Catalog Manager.
 Run: pytest tests/ -v --tb=short
 """
 import sys
@@ -41,19 +41,19 @@ def excel_svc(db, tmp_dir):
 def sample_product():
     return Product(
         sku="ACC01",
-        brand="ACCESORIOS",
-        description="Banditas de peinado siliconadas",
+        brand="ACCESSORIES",
+        description="Silicone hair styling bands",
         price_original=1834.29,
-        category="ACCESORIOS",
+        category="ACCESSORIES",
     )
 
 
 @pytest.fixture
 def sample_product_list():
     return [
-        Product("SKU001", "MARCA A", "Producto 1", 1000.0, "CAT A"),
-        Product("SKU002", "MARCA B", "Producto 2", 2500.0, "CAT A"),
-        Product("SKU003", "MARCA C", "Producto 3", 500.0,  "CAT B"),
+        Product("SKU001", "BRAND A", "Product 1", 1000.0, "CAT A"),
+        Product("SKU002", "BRAND B", "Product 2", 2500.0, "CAT A"),
+        Product("SKU003", "BRAND C", "Product 3", 500.0,  "CAT B"),
     ]
 
 
@@ -301,45 +301,46 @@ class TestExcelService:
         assert path.exists()
         assert path.suffix == ".xlsx"
         assert path.stat().st_size > 0
-        # Verificar 2 hojas
+        # Two sheets
         from openpyxl import load_workbook
         wb = load_workbook(str(path), data_only=False)
-        assert "Productos" in wb.sheetnames, "Debe existir hoja Productos"
-        assert "Sistema"   in wb.sheetnames, "Debe existir hoja Sistema"
-        # Precio Final ahora es un valor numérico pre-calculado (no fórmula) — C1 fix
+        assert "Products" in wb.sheetnames, "Products sheet must exist"
+        assert "System"   in wb.sheetnames, "System sheet must exist"
+        # Final Price is a pre-calculated numeric value (not a formula) — C1 fix
         # Row 1 = staleness banner, Row 2 = headers, Row 3+ = data
-        ws = wb["Productos"]
+        ws = wb["Products"]
         cell_val = ws.cell(3, 9).value
-        assert cell_val is not None, "Precio Final no debe estar vacío"
+        assert cell_val is not None, "Final Price must not be empty"
         assert isinstance(cell_val, (int, float)), (
-            f"Precio Final debe ser un número (no fórmula), got: {cell_val!r}"
+            f"Final Price must be a number (not a formula), got: {cell_val!r}"
         )
-        # Verificar que Imagen NO está en hoja 1 (headers ahora en fila 2)
+        assert ws.cell(3, 9).number_format == '"$"#,##0.00'
+        # The image column must NOT be on sheet 1 (headers are on row 2)
         headers = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
-        assert "Imagen" not in headers, "Imagen no debe estar en hoja Productos"
+        assert "Image" not in headers, "Image must not be on the Products sheet"
 
     def test_generate_excel_empty_db_raises(self, excel_svc, db):
-        with pytest.raises(ValueError, match="No hay productos"):
+        with pytest.raises(ValueError, match="no products"):
             excel_svc.generate_excel()
 
     def test_reimport_excel(self, excel_svc, db, tmp_dir, sample_product_list):
         self._populate_db(db, sample_product_list)
         # Export
         excel_path = excel_svc.generate_excel()
-        # Edit: desactivar SKU001 usando openpyxl
+        # Edit: deactivate SKU001 with openpyxl
         import openpyxl
         wb = openpyxl.load_workbook(str(excel_path))
-        ws = wb["Productos"]
+        ws = wb["Products"]
         # Row 1 = banner, Row 2 = headers, Row 3+ = data
         for row in ws.iter_rows(min_row=3):
             if row[1].value == "SKU001":  # col B = SKU
-                row[0].value = "NO"       # col A = Activo
+                row[0].value = "NO"       # col A = Active
         wb.save(str(excel_path))
         # Reimport
         results = excel_svc.reimport_excel(excel_path)
         assert results["processed"] == 3
         assert results["updated"] >= 1
-        # Verificar que SKU001 quedó inactivo
+        # SKU001 must now be inactive
         p = db.get_product("SKU001")
         assert p["active"] is False
 
@@ -365,3 +366,51 @@ class TestProcessingSession:
         s.complete()
         assert s.completed_at is not None
         assert s.duration_seconds >= 0
+
+
+# ─── Formatting helpers ───────────────────────────────────────────────────────
+
+class TestFormatting:
+    def test_format_price_us(self):
+        from app.utils.formatting import format_price
+        assert format_price(1234.5) == "$1,234.50"
+        assert format_price(18.06) == "$18.06"
+        assert format_price(1000, decimals=0) == "$1,000"
+
+    def test_parse_number_accepts_us_and_comma_decimal(self):
+        from app.utils.formatting import parse_number
+        assert parse_number("1,234.56") == pytest.approx(1234.56)
+        assert parse_number("$ 18.06") == pytest.approx(18.06)
+        assert parse_number("12,5") == pytest.approx(12.5)
+        assert parse_number("30") == pytest.approx(30.0)
+
+    def test_parse_number_rejects_garbage(self):
+        from app.utils.formatting import parse_number
+        with pytest.raises(ValueError):
+            parse_number("abc")
+        with pytest.raises(ValueError):
+            parse_number("")
+
+
+# ─── Legacy Excel compatibility ───────────────────────────────────────────────
+
+class TestLegacyExcelReimport:
+    def test_spanish_headers_still_reimport(self, excel_svc, db, tmp_dir, sample_product_list):
+        """Excels exported before the English UI used Spanish headers and SI/NO."""
+        TestExcelService()._populate_db(db, sample_product_list)
+        import openpyxl
+        legacy = tmp_dir / "legacy.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["banner"])
+        ws.append(["Activo", "SKU", "Marca", "Descripción", "Categoría",
+                   "Precio Original", "Margen %", "IVA %", "Precio Final", "Observaciones"])
+        ws.append(["NO", "SKU001", "BRAND A", "Product 1", "CAT A", 1000, 30, 0, 1300, ""])
+        ws.append(["SI", "SKU002", "BRAND B", "Product 2", "CAT A", 2500, 30, 0, 3250, ""])
+        wb.save(str(legacy))
+
+        results = excel_svc.reimport_excel(legacy)
+        assert results["errors"] == []
+        assert results["updated"] == 2
+        assert db.get_product("SKU001")["active"] is False
+        assert db.get_product("SKU002")["active"] is True

@@ -11,6 +11,7 @@ import fitz
 
 from app.parsers.base_parser import BaseParser
 from app.parsers.mayoristas_i_parser import MayoristasIParser
+from app.parsers.ga_murdock_parser import GAMurdockParser
 from app.logging_config.logger import get_logger
 
 log = get_logger("parser_factory")
@@ -19,6 +20,7 @@ log = get_logger("parser_factory")
 # ─── Registry: add new parsers here ──────────────────────────────────────────
 REGISTERED_PARSERS: list[Type[BaseParser]] = [
     MayoristasIParser,
+    GAMurdockParser,
     # Future: ProviderBParser, ProviderCParser, ...
 ]
 
@@ -72,7 +74,7 @@ class ParserFactory:
             supported = ", ".join(p.SUPPLIER_NAME for p in REGISTERED_PARSERS)
             log.warning(
                 f"No parser matched this PDF. "
-                f"Proveedores soportados: {supported}"
+                f"Supported suppliers: {supported}"
             )
             return None
 

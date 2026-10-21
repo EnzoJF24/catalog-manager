@@ -8,7 +8,7 @@ plus an optional message — no full-screen dimming.
 Usage:
     spinner = Spinner(parent)
     spinner.grid(row=0, column=0, sticky="w")
-    spinner.start("Generando Excel...")
+    spinner.start("Generating Excel...")
     # ... background work ...
     spinner.stop()
 """
@@ -65,6 +65,7 @@ class Spinner(ctk.CTkFrame):
         if self._label is not None:
             self._label.configure(text=message)
         self._frame_idx = 0
+        self._show()
         self._tick()
 
     def stop(self):
@@ -78,6 +79,24 @@ class Spinner(ctk.CTkFrame):
         self._icon.configure(text="")
         if self._label is not None:
             self._label.configure(text="")
+        self._hide()
+
+    # Hidden while idle so an empty spinner never reserves layout space.
+    # grid_remove() keeps the grid options, so grid() restores the position.
+    def _show(self):
+        if self.winfo_manager() == "" and getattr(self, "_was_gridded", False):
+            ctk.CTkFrame.grid(self)   # base grid(): restores the remembered options
+
+    def _hide(self):
+        if self.winfo_manager() == "grid":
+            self._was_gridded = True
+            self.grid_remove()
+
+    def grid(self, *args, **kwargs):
+        super().grid(*args, **kwargs)
+        self._was_gridded = True
+        if not self.running:
+            self.after_idle(self._hide)
 
     def set_message(self, message: str):
         """Update message without restarting the animation."""

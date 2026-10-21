@@ -1,5 +1,6 @@
-"""Dashboard frame — stats + 4 widgets (última import / top categorías / salud / actividad)."""
+"""Dashboard frame — KPIs + last import / catalog health / top categories / recent activity."""
 from __future__ import annotations
+import json
 from datetime import datetime
 from typing import Callable, Optional
 import customtkinter as ctk
@@ -8,17 +9,14 @@ from app.logging_config.logger import get_logger
 log = get_logger("dashboard_frame")
 
 from app.core.app_controller import AppController
+from app.ui.icons import icon
 from app.ui.theme import (
-    BG_BASE, BG_CARD, BG_ELEVATED, BG_DEEPEST,
-    ACCENT_PRIMARY,
-    ACCENT_BLUE,
-    ACCENT_SUCCESS,
-    ACCENT_WARNING,
-    ACCENT_PURPLE,
-    ACCENT_DANGER,
+    BG_BASE, BG_ELEVATED, BG_HOVER, BORDER,
+    ACCENT, SUCCESS, WARNING, DANGER,
     TEXT_PRIMARY, TEXT_HEADING, TEXT_MUTED, TEXT_SUBTLE,
-    RADIUS_CARD, RADIUS_CHIP,
-    font_title, font_body, font_small, font_label, font_bold,
+    PAGE_PADX, FONT_SEMIBOLD,
+    font_small, font_label, font_caps, font_number,
+    card, section_title, page_header, pill, set_pill, fmt_int,
 )
 from app.ui.components.tooltip import Tooltip
 
@@ -31,7 +29,7 @@ def _fmt_dt(dt) -> str:
     try:
         if isinstance(dt, str):
             dt = datetime.fromisoformat(dt[:19])
-        return dt.strftime("%d/%m/%Y %H:%M")
+        return dt.strftime("%m/%d/%Y %H:%M")
     except (ValueError, TypeError):
         return str(dt)[:16]
 
@@ -46,32 +44,32 @@ def _humanize_delta(then: datetime) -> str:
         delta = datetime.now() - then
         secs  = int(delta.total_seconds())
         if secs < 60:
-            return "hace un instante"
+            return "just now"
         mins = secs // 60
         if mins < 60:
-            return f"hace {mins} min"
+            return f"{mins} min ago"
         hours = mins // 60
         if hours < 24:
-            return f"hace {hours} h"
+            return f"{hours} h ago"
         days = hours // 24
         if days == 1:
-            return "ayer"
+            return "yesterday"
         if days < 30:
-            return f"hace {days} días"
-        return "hace +1 mes"
+            return f"{days} days ago"
+        return "1+ month ago"
     except (ValueError, TypeError):
         return "—"
 
 
 # ── Activity-log helpers ─────────────────────────────────────────────────────
-# Visual colour/icon for each activity kind. The kind values match what the
-# controller writes via db.log_activity().
-ACTIVITY_STYLE: dict[str, tuple[str, str]] = {
-    "import":       ("📥", ACCENT_BLUE),
-    "edit_batch":   ("✏",  ACCENT_WARNING),
-    "excel":        ("📊", ACCENT_SUCCESS),
-    "pdf":          ("📋", ACCENT_PURPLE),
-    "margin_apply": ("💰", ACCENT_PURPLE),
+# Icon for each activity kind. The kind values match what the controller
+# writes via db.log_activity().
+ACTIVITY_ICON: dict[str, str] = {
+    "import":       "upload",
+    "edit_batch":   "edit",
+    "excel":        "sheet",
+    "pdf":          "file_text",
+    "margin_apply": "percent",
 }
 
 
@@ -123,33 +121,65 @@ def _collapsed_entry(group: list[dict]) -> dict:
         kind = head["kind"]
         # Rewrite summary so the user sees the cluster size at a glance.
         if kind == "edit_batch" and total > 0:
-            head["summary"] = f"Editaste {total} productos (en {len(group)} lotes)"
+            head["summary"] = f"Edited {total} products (in {len(group)} batches)"
         else:
             head["summary"] = head["summary"] + f"  · ×{len(group)}"
         head["count"] = total
     return head
 
 
-# ── Stat card ────────────────────────────────────────────────────────────────
+# Health checks: (key, label, explanation shown on hover)
+HEALTH_CHECKS = [
+    ("no_image",       "Products without an image",
+     "Active products without a linked image — they were probably not\n"
+     "extracted from the PDF.\n\nDouble-click to open them in Products."),
+    ("missing_image",  "Image file missing on disk",
+     "The database links an image, but the file was deleted from the\n"
+     "'extracted_images/' folder.\n\nDouble-click to open them in Products."),
+    ("zero_price",     "Final price is $0",
+     "Active products whose Final Price ended up at $0 — usually a\n"
+     "parsing problem worth reviewing.\n\nDouble-click to open them in Products."),
+    ("low_margin",     "Margin below 10%",
+     "Active products with a margin under 10% — prices may be\n"
+     "suspiciously low.\n\nDouble-click to open them in Products."),
+    ("no_description", "Missing description",
+     "Active products with an empty Description field.\n\n"
+     "Double-click to open them in Products."),
+]
+
+
+# ── KPI card ─────────────────────────────────────────────────────────────────
 
 class StatCard(ctk.CTkFrame):
-    def __init__(self, parent, title: str, value: str, color: str):
-        super().__init__(parent, fg_color=BG_CARD, corner_radius=RADIUS_CARD)
-        self.grid_columnconfigure(0, weight=1)
-        self._val_label = ctk.CTkLabel(
-            self, text=value,
-            font=ctk.CTkFont(size=30, weight="bold"),
-            text_color=color,
-        )
-        self._val_label.grid(row=0, column=0, padx=18, pady=(14, 2))
-        ctk.CTkLabel(
-            self, text=title,
-            font=font_small(),
-            text_color=TEXT_MUTED,
-        ).grid(row=1, column=0, padx=18, pady=(0, 14))
+    """Caption with a status dot, a large neutral number and a one-line context."""
 
-    def update_value(self, value: str):
+    def __init__(self, parent, title: str, dot_color: str):
+        super().__init__(parent, fg_color="transparent")
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self._card = card(self, row=0, column=0, sticky="nsew")
+        self._card.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkFrame(self._card, width=8, height=8, corner_radius=4, fg_color=dot_color).grid(
+            row=0, column=0, padx=(18, 8), pady=(16, 0), sticky="w")
+        ctk.CTkLabel(self._card, text=title, font=font_label(), text_color=TEXT_MUTED,
+                     anchor="w").grid(row=0, column=1, pady=(16, 0), sticky="w")
+
+        self._val_label = ctk.CTkLabel(self._card, text="—", font=font_number(28),
+                                       text_color=TEXT_PRIMARY, anchor="w")
+        self._val_label.grid(row=1, column=0, columnspan=2, padx=18, pady=(4, 0), sticky="w")
+
+        self._hint = ctk.CTkLabel(self._card, text="", font=font_small(),
+                                  text_color=TEXT_SUBTLE, anchor="w")
+        self._hint.grid(row=2, column=0, columnspan=2, padx=18, pady=(0, 14), sticky="w")
+
+    @property
+    def surface(self) -> ctk.CTkFrame:
+        return self._card
+
+    def update_value(self, value: str, hint: str = ""):
         self._val_label.configure(text=value)
+        self._hint.configure(text=hint)
 
 
 # ── Dashboard ────────────────────────────────────────────────────────────────
@@ -161,8 +191,6 @@ class DashboardFrame(ctk.CTkFrame):
         self.controller  = controller
         self.navigate_cb = navigate_cb
         self._cards: dict[str, StatCard] = {}
-        # Chip-frame references kept so we can re-bind on each render
-        self._health_chip_widgets: list[ctk.CTkFrame] = []
         # SKUs of products whose image files are missing on disk (from last on_show)
         self._missing_image_skus: list[str] = []
         self._build()
@@ -173,356 +201,137 @@ class DashboardFrame(ctk.CTkFrame):
         self.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="stats")
         self.grid_rowconfigure(3, weight=1)
 
-        # ── Header ───────────────────────────────────────────────────────────
-        ctk.CTkLabel(
-            self, text="Dashboard",
-            font=font_title(), text_color=TEXT_PRIMARY,
-        ).grid(row=0, column=0, columnspan=4, padx=24, pady=(20, 2), sticky="w")
+        header = page_header(self, "Dashboard", " ")
+        header.grid(row=0, column=0, columnspan=4, padx=PAGE_PADX, pady=(26, 18), sticky="ew")
+        self._subtitle = header.grid_slaves(row=1, column=0)[0]
 
-        ctk.CTkLabel(
-            self, text="Resumen y estado del catálogo",
-            font=font_body(), text_color=TEXT_MUTED,
-        ).grid(row=1, column=0, columnspan=4, padx=24, pady=(0, 14), sticky="w")
-
-        # ── Stat cards (4) ───────────────────────────────────────────────────
+        # ── KPI cards ────────────────────────────────────────────────────────
         card_defs = [
-            ("total",        "Total",          ACCENT_PRIMARY),
-            ("active",       "Activos",        ACCENT_SUCCESS),
-            ("inactive",     "Inactivos",      ACCENT_WARNING),
-            ("discontinued", "Discontinuados", TEXT_MUTED),
+            ("total",        "Total products", ACCENT),
+            ("active",       "Active",         SUCCESS),
+            ("inactive",     "Inactive",       WARNING),
+            ("discontinued", "Discontinued",   TEXT_SUBTLE),
         ]
-        for col, (key, label, color) in enumerate(card_defs):
-            card = StatCard(self, label, "—", color)
-            card.grid(row=2, column=col, padx=(24 if col == 0 else 6,
-                                                24 if col == 3 else 6),
-                      pady=4, sticky="ew")
-            self._cards[key] = card
+        for col, (key, label, dot) in enumerate(card_defs):
+            sc = StatCard(self, label, dot)
+            sc.grid(row=1, column=col,
+                    padx=(PAGE_PADX if col == 0 else 6, PAGE_PADX if col == 3 else 6),
+                    sticky="nsew")
+            self._cards[key] = sc
 
-        # Tooltips on all stat cards
-        Tooltip(
-            self._cards["total"],
-            "Total de productos en la base de datos, incluyendo activos,\n"
-            "inactivos y discontinuados.",
-        )
-        Tooltip(
-            self._cards["active"],
-            "Productos activos: visibles en el catálogo y disponibles para\n"
-            "incluir en exportaciones de Excel y PDF.\n\n"
-            "Un producto es activo cuando no está marcado como inactivo\n"
-            "ni discontinuado.",
-        )
-        Tooltip(
-            self._cards["inactive"],
-            "Productos marcados como inactivos manualmente desde la solapa\n"
-            "Productos.\n\n"
-            "No aparecen en exportaciones de 'Solo activos' pero siguen en\n"
-            "la base de datos. Podés reactivarlos en cualquier momento.",
-        )
-        Tooltip(
-            self._cards["discontinued"],
-            "Productos que aparecían en importaciones anteriores pero ya no\n"
-            "figuran en el catálogo más reciente del proveedor.\n\n"
-            "Se marcan automáticamente al importar un PDF nuevo: cualquier SKU\n"
-            "que no aparezca en el PDF actual queda marcado como discontinuado.\n\n"
-            "⚠  No es posible desmarcarlos manualmente desde la interfaz.",
-        )
+        Tooltip(self._cards["total"].surface,
+                "Every product in the database: active, inactive and discontinued.")
+        Tooltip(self._cards["active"].surface,
+                "Visible in the catalog and included in Excel and PDF exports.")
+        Tooltip(self._cards["inactive"].surface,
+                "Hidden manually from the Products tab. Left out of 'Active only'\n"
+                "exports, but kept in the database — reactivate them any time.")
+        Tooltip(self._cards["discontinued"].surface,
+                "Products from earlier imports that are missing from the supplier's\n"
+                "latest PDF. Flagged automatically on import.")
 
-        # ── 4 main widgets in a 2×2 grid ─────────────────────────────────────
-        widgets_frame = ctk.CTkFrame(self, fg_color=BG_BASE, corner_radius=0)
-        widgets_frame.grid(row=3, column=0, columnspan=4,
-                           padx=24, pady=(14, 16), sticky="nsew")
-        widgets_frame.grid_columnconfigure(0, weight=1, uniform="dash")
-        widgets_frame.grid_columnconfigure(1, weight=1, uniform="dash")
-        widgets_frame.grid_rowconfigure(0, weight=1)
-        widgets_frame.grid_rowconfigure(1, weight=1)
+        # ── 2 × 2 widget grid ────────────────────────────────────────────────
+        grid = ctk.CTkFrame(self, fg_color="transparent")
+        grid.grid(row=3, column=0, columnspan=4, padx=PAGE_PADX, pady=(12, 22), sticky="nsew")
+        grid.grid_columnconfigure(0, weight=3, uniform="dash")
+        grid.grid_columnconfigure(1, weight=2, uniform="dash")
+        grid.grid_rowconfigure((0, 1), weight=1)
 
-        # Top-left: Última importación (redesigned)
-        self._build_last_import_card(widgets_frame, row=0, col=0)
-        # Top-right: Salud (now rowspan=1)
-        self._build_health_card(widgets_frame, row=0, col=1)
-        # Bottom-left: Top categorías
-        self._build_top_categories_card(widgets_frame, row=1, col=0)
-        # Bottom-right: Actividad reciente (NEW)
-        self._build_activity_card(widgets_frame, row=1, col=1)
+        self._build_last_import_card(grid, row=0, col=0)
+        self._build_health_card(grid, row=0, col=1)
+        self._build_top_categories_card(grid, row=1, col=0)
+        self._build_activity_card(grid, row=1, col=1)
 
-    # ── Última importación (redesigned) ───────────────────────────────────────
+    # ── Last import ───────────────────────────────────────────────────────────
 
     def _build_last_import_card(self, parent, row: int, col: int):
-        card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=RADIUS_CARD)
-        card.grid(row=row, column=col, padx=(0, 6), pady=(0, 6), sticky="nsew")
-        card.grid_columnconfigure(0, weight=1)
+        c = card(parent, row=row, column=col, padx=(0, 6), pady=(0, 6), sticky="nsew")
+        c.grid_columnconfigure(0, weight=1)
 
-        # Header row: title + status badge
-        header = ctk.CTkFrame(card, fg_color="transparent")
-        header.grid(row=0, column=0, padx=16, pady=(14, 6), sticky="ew")
-        header.grid_columnconfigure(0, weight=1)
-
-        _li_title = ctk.CTkLabel(
-            header, text="📥  Última importación",
-            font=ctk.CTkFont(size=14, weight="bold"), text_color=ACCENT_BLUE,
-        )
-        _li_title.grid(row=0, column=0, sticky="w")
-        Tooltip(
-            _li_title,
-            "Resumen de la última importación de PDF realizada.\n\n"
-            "Muestra proveedor, fecha, cantidad de productos procesados,\n"
-            "imágenes vinculadas y duración de la importación.\n\n"
-            "La barra de progreso indica el porcentaje de productos\n"
-            "a los que se les pudo asignar una imagen (match de imágenes).",
-            wraplength=340,
-        )
-
-        self._li_badge = ctk.CTkLabel(
-            header, text="", padx=10, pady=2,
-            font=ctk.CTkFont(size=10, weight="bold"),
-            corner_radius=6, fg_color="transparent",
-        )
+        head = section_title(c, "Last import")
+        head.grid(row=0, column=0, padx=20, pady=(18, 0), sticky="ew")
+        self._li_badge = pill(head)
         self._li_badge.grid(row=0, column=1, sticky="e")
+        Tooltip(head, "The most recent supplier PDF import: supplier, when it ran,\n"
+                      "products processed, linked images and duration.")
 
-        # Big proveedor name
-        self._li_supplier = ctk.CTkLabel(
-            card, text="—",
-            font=ctk.CTkFont(size=22, weight="bold"),
-            text_color=TEXT_PRIMARY, anchor="w",
-        )
-        self._li_supplier.grid(row=1, column=0, padx=16, pady=(2, 0), sticky="w")
+        self._li_supplier = ctk.CTkLabel(c, text="—", font=ctk.CTkFont(family=FONT_SEMIBOLD, size=20),
+                                         text_color=TEXT_PRIMARY, anchor="w")
+        self._li_supplier.grid(row=1, column=0, padx=20, pady=(12, 0), sticky="w")
 
-        # Relative time line (hace X · martes 14:32)
-        self._li_when = ctk.CTkLabel(
-            card, text="",
-            font=font_small(), text_color=TEXT_MUTED, anchor="w",
-        )
-        self._li_when.grid(row=2, column=0, padx=16, pady=(0, 10), sticky="w")
+        self._li_when = ctk.CTkLabel(c, text="", font=font_label(), text_color=TEXT_MUTED, anchor="w")
+        self._li_when.grid(row=2, column=0, padx=20, sticky="w")
 
-        # 3 chips: productos / imágenes / duración
-        chips = ctk.CTkFrame(card, fg_color="transparent")
-        chips.grid(row=3, column=0, padx=12, pady=(0, 8), sticky="ew")
-        chips.grid_columnconfigure((0, 1, 2), weight=1, uniform="chip")
+        stats = ctk.CTkFrame(c, fg_color="transparent")
+        stats.grid(row=3, column=0, padx=20, pady=(18, 0), sticky="ew")
+        stats.grid_columnconfigure((0, 1, 2), weight=1, uniform="li")
+        self._li_stats: dict[str, ctk.CTkLabel] = {}
+        for i, (key, caption) in enumerate([("products", "PRODUCTS"), ("images", "WITH IMAGE"),
+                                            ("duration", "DURATION")]):
+            cell = ctk.CTkFrame(stats, fg_color="transparent")
+            cell.grid(row=0, column=i, sticky="w")
+            if i:
+                ctk.CTkFrame(cell, width=1, height=36, fg_color=BORDER).grid(
+                    row=0, column=0, rowspan=2, padx=(0, 16))
+            ctk.CTkLabel(cell, text=caption, font=font_caps(), text_color=TEXT_SUBTLE,
+                         anchor="w").grid(row=0, column=1, sticky="w")
+            val = ctk.CTkLabel(cell, text="—", font=font_number(18), text_color=TEXT_PRIMARY, anchor="w")
+            val.grid(row=1, column=1, sticky="w")
+            self._li_stats[key] = val
 
-        self._li_chip_products = self._make_stat_chip(chips, "📦", "—", "productos", ACCENT_PRIMARY)
-        self._li_chip_products.grid(row=0, column=0, padx=4, sticky="ew")
-
-        self._li_chip_images = self._make_stat_chip(chips, "🖼", "—", "imágenes", ACCENT_BLUE)
-        self._li_chip_images.grid(row=0, column=1, padx=4, sticky="ew")
-
-        self._li_chip_duration = self._make_stat_chip(chips, "⏱", "—", "duración", ACCENT_PURPLE)
-        self._li_chip_duration.grid(row=0, column=2, padx=4, sticky="ew")
-
-        # Image-match progress bar
-        prog_wrap = ctk.CTkFrame(card, fg_color="transparent")
-        prog_wrap.grid(row=4, column=0, padx=16, pady=(6, 14), sticky="ew")
-        prog_wrap.grid_columnconfigure(0, weight=1)
-
-        prog_header = ctk.CTkFrame(prog_wrap, fg_color="transparent")
-        prog_header.grid(row=0, column=0, sticky="ew")
-        prog_header.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            prog_header, text="Match de imágenes",
-            font=font_small(), text_color=TEXT_MUTED, anchor="w",
-        ).grid(row=0, column=0, sticky="w")
-        self._li_pct_label = ctk.CTkLabel(
-            prog_header, text="—",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=TEXT_HEADING, anchor="e",
-        )
+        cov = ctk.CTkFrame(c, fg_color="transparent")
+        cov.grid(row=4, column=0, padx=20, pady=(20, 20), sticky="ew")
+        cov.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(cov, text="Image coverage", font=font_small(), text_color=TEXT_MUTED,
+                     anchor="w").grid(row=0, column=0, sticky="w")
+        self._li_pct_label = ctk.CTkLabel(cov, text="—", font=font_caps(), text_color=TEXT_HEADING)
         self._li_pct_label.grid(row=0, column=1, sticky="e")
-
-        self._li_progress = ctk.CTkProgressBar(
-            prog_wrap, height=8, fg_color=BG_ELEVATED,
-            progress_color=ACCENT_SUCCESS,
-        )
+        self._li_progress = ctk.CTkProgressBar(cov, height=6, corner_radius=3,
+                                               fg_color=BG_ELEVATED, progress_color=ACCENT)
         self._li_progress.set(0)
-        self._li_progress.grid(row=1, column=0, pady=(4, 0), sticky="ew")
+        self._li_progress.grid(row=1, column=0, columnspan=2, pady=(6, 0), sticky="ew")
 
-    def _make_stat_chip(self, parent, icon: str, value: str, label: str,
-                        color: str) -> ctk.CTkFrame:
-        chip = ctk.CTkFrame(parent, fg_color=BG_DEEPEST, corner_radius=8)
-        chip.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            chip, text=icon, font=ctk.CTkFont(size=15),
-            text_color=color,
-        ).grid(row=0, column=0, padx=8, pady=(8, 0))
-        val = ctk.CTkLabel(
-            chip, text=value,
-            font=ctk.CTkFont(size=15, weight="bold"),
-            text_color=TEXT_HEADING,
-        )
-        val.grid(row=1, column=0, padx=8, pady=(0, 0))
-        ctk.CTkLabel(
-            chip, text=label,
-            font=font_small(), text_color=TEXT_MUTED,
-        ).grid(row=2, column=0, padx=8, pady=(0, 8))
-        # store the value label for later updates
-        chip._value_label = val          # type: ignore[attr-defined]
-        return chip
-
-    def _set_chip_value(self, chip: ctk.CTkFrame, value: str):
-        try:
-            chip._value_label.configure(text=value)   # type: ignore[attr-defined]
-        except Exception:
-            pass
-
-    # ── Top categorías (sin cambios estructurales) ───────────────────────────
-
-    def _build_top_categories_card(self, parent, row: int, col: int):
-        card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=RADIUS_CARD)
-        card.grid(row=row, column=col, padx=(0, 6), pady=(6, 0), sticky="nsew")
-        card.grid_columnconfigure(0, weight=1)
-        card.grid_rowconfigure(1, weight=1)
-
-        _tc_title = ctk.CTkLabel(
-            card, text="🏷  Top categorías",
-            font=ctk.CTkFont(size=14, weight="bold"), text_color=ACCENT_PURPLE,
-        )
-        _tc_title.grid(row=0, column=0, padx=16, pady=(14, 8), sticky="w")
-        Tooltip(
-            _tc_title,
-            "Las 6 categorías con mayor cantidad de productos activos.\n\n"
-            "La barra muestra la proporción relativa de cada categoría\n"
-            "respecto a la que tiene más productos.",
-        )
-
-        self._tc_container = ctk.CTkFrame(card, fg_color="transparent")
-        self._tc_container.grid(row=1, column=0, padx=14, pady=(0, 14), sticky="nsew")
-        self._tc_container.grid_columnconfigure(0, weight=1)
-
-    def _render_top_categories(self, items: list[dict]):
-        for w in self._tc_container.winfo_children():
-            w.destroy()
-
-        if not items:
-            ctk.CTkLabel(
-                self._tc_container, text="Sin categorías registradas.",
-                font=font_small(), text_color=TEXT_SUBTLE,
-            ).grid(row=0, column=0, padx=4, pady=8, sticky="w")
-            return
-
-        max_count = max(it["count"] for it in items) or 1
-        for i, it in enumerate(items[:6]):
-            cat   = it["category"]
-            count = it["count"]
-            pct   = count / max_count
-
-            row = ctk.CTkFrame(self._tc_container, fg_color="transparent", height=22)
-            row.grid(row=i, column=0, padx=2, pady=1, sticky="ew")
-            row.grid_columnconfigure(1, weight=1)
-
-            ctk.CTkLabel(
-                row, text=cat[:24],
-                font=font_small(), text_color=TEXT_HEADING,
-                anchor="w", width=145,
-            ).grid(row=0, column=0, padx=(2, 6), sticky="w")
-
-            bar_bg = ctk.CTkFrame(row, fg_color=BG_ELEVATED, height=10, corner_radius=3)
-            bar_bg.grid(row=0, column=1, padx=4, sticky="ew")
-            bar_bg.grid_propagate(False)
-            bar_bg.grid_columnconfigure(0, weight=1)
-            fill = ctk.CTkFrame(bar_bg, fg_color=ACCENT_PURPLE, corner_radius=3)
-            fill.place(relx=0, rely=0, relwidth=pct, relheight=1)
-
-            ctk.CTkLabel(
-                row, text=str(count),
-                font=font_small(), text_color=TEXT_MUTED,
-                anchor="e", width=46,
-            ).grid(row=0, column=2, padx=(6, 4), sticky="e")
-
-    # ── Salud del catálogo (rowspan=1 + double-click) ────────────────────────
+    # ── Catalog health ────────────────────────────────────────────────────────
 
     def _build_health_card(self, parent, row: int, col: int):
-        card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=RADIUS_CARD)
-        card.grid(row=row, column=col, padx=(6, 0), pady=(0, 6), sticky="nsew")
-        card.grid_columnconfigure(0, weight=1)
-        card.grid_rowconfigure(1, weight=1)
-
-        title = ctk.CTkLabel(
-            card, text="🩺  Salud del catálogo",
-            font=ctk.CTkFont(size=14, weight="bold"), text_color=ACCENT_SUCCESS,
-        )
-        title.grid(row=0, column=0, padx=16, pady=(14, 4), sticky="w")
-        Tooltip(
-            title,
-            "Lista de alertas sobre la calidad de los datos del catálogo.\n"
-            "Doble-click en una alerta para abrir los productos afectados.",
-        )
-
-        self._health_container = ctk.CTkFrame(card, fg_color="transparent")
-        self._health_container.grid(row=1, column=0, padx=14, pady=(0, 12), sticky="nsew")
+        c = card(parent, row=row, column=col, padx=(6, 0), pady=(0, 6), sticky="nsew")
+        c.grid_columnconfigure(0, weight=1)
+        section_title(c, "Catalog health", "double-click to review").grid(
+            row=0, column=0, padx=20, pady=(18, 8), sticky="ew")
+        self._health_container = ctk.CTkFrame(c, fg_color="transparent")
+        self._health_container.grid(row=1, column=0, padx=10, pady=(0, 14), sticky="nsew")
         self._health_container.grid_columnconfigure(0, weight=1)
 
     def _render_health(self, health: dict):
         for w in self._health_container.winfo_children():
             w.destroy()
-        self._health_chip_widgets.clear()
 
-        checks = [
-            ("no_image",       "Sin imagen",        "Productos activos sin imagen vinculada.\nProbablemente no se hayan extraído correctamente del PDF.\n\nDoble-click → abrir Productos filtrados."),
-            ("missing_image",  "Imagen no encontrada", "Productos activos que tienen imagen asignada en la base de\ndatos, pero el archivo ya no existe en disco.\n\nEstos archivos probablemente fueron borrados manualmente de\nla carpeta 'extracted_images/'.\n\nDoble-click → ver productos con imagen asignada."),
-            ("zero_price",     "Precio = 0",        "Productos activos cuyo Precio Final quedó en $0.\nRevisá manualmente — puede ser un error de parseo.\n\nDoble-click → abrir Productos filtrados."),
-            ("low_margin",     "Margen < 10%",      "Productos activos con margen menor al 10%.\nPueden ser precios sospechosamente bajos.\n\nDoble-click → abrir Productos filtrados."),
-            ("no_description", "Sin descripción",   "Productos activos sin texto en el campo Descripción.\n\nDoble-click → abrir Productos filtrados."),
-        ]
-
-        any_issue = False
-        for i, (key, label, tip) in enumerate(checks):
+        for i, (key, label, tip) in enumerate(HEALTH_CHECKS):
             count = int(health.get(key, 0) or 0)
-            if count == 0:
-                continue
-            any_issue = True
+            failing = count > 0
+            row = ctk.CTkFrame(self._health_container, fg_color="transparent", corner_radius=8,
+                               cursor="hand2" if failing else "")
+            row.grid(row=i, column=0, pady=1, sticky="ew")
+            row.grid_columnconfigure(1, weight=1)
 
-            chip = ctk.CTkFrame(
-                self._health_container,
-                fg_color=BG_DEEPEST, corner_radius=RADIUS_CHIP,
-                border_color=ACCENT_WARNING, border_width=1,
-                cursor="hand2",
-            )
-            chip.grid(row=i, column=0, padx=2, pady=3, sticky="ew")
-            chip.grid_columnconfigure(1, weight=1)
+            ic = ctk.CTkLabel(row, text="", width=20,
+                              image=icon("alert" if failing else "check_circle",
+                                         WARNING if failing else SUCCESS, 16))
+            ic.grid(row=0, column=0, padx=(10, 10), pady=2)
+            lbl = ctk.CTkLabel(row, text=label, font=font_label(),
+                               text_color=TEXT_HEADING if failing else TEXT_MUTED, anchor="w")
+            lbl.grid(row=0, column=1, sticky="w")
+            num = ctk.CTkLabel(row, text=fmt_int(count) if failing else "OK", font=font_caps(),
+                               text_color=WARNING if failing else TEXT_SUBTLE)
+            num.grid(row=0, column=2, padx=(6, 12), sticky="e")
+            Tooltip(row, tip)
 
-            icon = ctk.CTkLabel(
-                chip, text="⚠", font=ctk.CTkFont(size=14),
-                text_color=ACCENT_WARNING, width=24,
-            )
-            icon.grid(row=0, column=0, padx=(10, 4), pady=6)
-
-            lbl = ctk.CTkLabel(
-                chip, text=label,
-                font=font_label(), text_color=TEXT_HEADING, anchor="w",
-            )
-            lbl.grid(row=0, column=1, padx=4, pady=6, sticky="w")
-
-            num = ctk.CTkLabel(
-                chip, text=f"{count}",
-                font=ctk.CTkFont(size=13, weight="bold"),
-                text_color=ACCENT_WARNING, width=50, anchor="e",
-            )
-            num.grid(row=0, column=2, padx=(4, 12), pady=6, sticky="e")
-
-            Tooltip(chip, tip)
-
-            # Bind double-click to navigate — bind on chip AND every inner widget
-            handler = (lambda e, k=key, lbl=label, n=count:
-                       self._open_health_filter(k, lbl, n))
-            for w in (chip, icon, lbl, num):
-                w.bind("<Double-Button-1>", handler, add="+")
-
-            self._health_chip_widgets.append(chip)
-
-        if not any_issue:
-            ok = ctk.CTkFrame(
-                self._health_container,
-                fg_color=BG_DEEPEST, corner_radius=RADIUS_CHIP,
-                border_color=ACCENT_SUCCESS, border_width=1,
-            )
-            ok.grid(row=0, column=0, padx=2, pady=8, sticky="ew")
-            ok.grid_columnconfigure(1, weight=1)
-            ctk.CTkLabel(
-                ok, text="✓", font=ctk.CTkFont(size=18, weight="bold"),
-                text_color=ACCENT_SUCCESS, width=30,
-            ).grid(row=0, column=0, padx=(14, 6), pady=12)
-            ctk.CTkLabel(
-                ok, text="Sin alertas — el catálogo está saludable.",
-                font=font_label(), text_color=TEXT_HEADING, anchor="w",
-            ).grid(row=0, column=1, padx=6, pady=12, sticky="w")
+            if failing:
+                handler = (lambda e, k=key, l=label, n=count: self._open_health_filter(k, l, n))
+                for w in (row, ic, lbl, num):
+                    w.bind("<Double-Button-1>", handler, add="+")
+                    w.bind("<Enter>", lambda e, r=row: r.configure(fg_color=BG_HOVER), add="+")
+                    w.bind("<Leave>", lambda e, r=row: r.configure(fg_color="transparent"), add="+")
 
     def _open_health_filter(self, key: str, label: str, count: int):
         """Navigate to Products with the given health filter active."""
@@ -538,69 +347,78 @@ class DashboardFrame(ctk.CTkFrame):
             # Fallback to plain navigation if signature mismatch
             self.navigate_cb("products")
 
-    # ── Actividad reciente (NEW) ──────────────────────────────────────────────
+    # ── Top categories ────────────────────────────────────────────────────────
+
+    def _build_top_categories_card(self, parent, row: int, col: int):
+        c = card(parent, row=row, column=col, padx=(0, 6), pady=(6, 0), sticky="nsew")
+        c.grid_columnconfigure(0, weight=1)
+        section_title(c, "Top categories", "active products").grid(
+            row=0, column=0, padx=20, pady=(18, 10), sticky="ew")
+        self._tc_container = ctk.CTkFrame(c, fg_color="transparent")
+        self._tc_container.grid(row=1, column=0, padx=20, pady=(0, 16), sticky="nsew")
+        self._tc_container.grid_columnconfigure(1, weight=1)
+
+    def _render_top_categories(self, items: list[dict]):
+        for w in self._tc_container.winfo_children():
+            w.destroy()
+
+        if not items:
+            ctk.CTkLabel(self._tc_container, text="No categories yet.", font=font_small(),
+                         text_color=TEXT_SUBTLE).grid(row=0, column=0, pady=8, sticky="w")
+            return
+
+        max_count = max(it["count"] for it in items) or 1
+        for i, it in enumerate(items[:6]):
+            ctk.CTkLabel(self._tc_container, text=it["category"][:26], font=font_label(),
+                         text_color=TEXT_HEADING, anchor="w", width=150).grid(
+                row=i, column=0, pady=1, sticky="w")
+            bar_bg = ctk.CTkFrame(self._tc_container, fg_color=BG_ELEVATED, height=6, corner_radius=3)
+            bar_bg.grid(row=i, column=1, padx=12, sticky="ew")
+            bar_bg.grid_propagate(False)
+            ctk.CTkFrame(bar_bg, fg_color=ACCENT, corner_radius=3).place(
+                relx=0, rely=0, relwidth=max(it["count"] / max_count, 0.02), relheight=1)
+            ctk.CTkLabel(self._tc_container, text=fmt_int(it["count"]), font=font_label(),
+                         text_color=TEXT_MUTED, width=44, anchor="e").grid(row=i, column=2, sticky="e")
+
+    # ── Recent activity ───────────────────────────────────────────────────────
 
     def _build_activity_card(self, parent, row: int, col: int):
-        card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=RADIUS_CARD)
-        card.grid(row=row, column=col, padx=(6, 0), pady=(6, 0), sticky="nsew")
-        card.grid_columnconfigure(0, weight=1)
-        card.grid_rowconfigure(1, weight=1)
-
-        title = ctk.CTkLabel(
-            card, text="⏱  Actividad reciente",
-            font=ctk.CTkFont(size=14, weight="bold"), text_color=ACCENT_WARNING,
-        )
-        title.grid(row=0, column=0, padx=16, pady=(14, 4), sticky="w")
-        Tooltip(
-            title,
-            "Últimas acciones del sistema (importaciones, ediciones masivas,\n"
-            "generaciones de Excel/PDF). Las ediciones consecutivas del mismo\n"
-            "tipo se agrupan automáticamente para evitar ruido.",
-        )
-
-        self._ar_container = ctk.CTkFrame(card, fg_color="transparent")
-        self._ar_container.grid(row=1, column=0, padx=12, pady=(0, 12), sticky="nsew")
-        self._ar_container.grid_columnconfigure(0, weight=1)
+        c = card(parent, row=row, column=col, padx=(6, 0), pady=(6, 0), sticky="nsew")
+        c.grid_columnconfigure(0, weight=1)
+        head = section_title(c, "Recent activity")
+        head.grid(row=0, column=0, padx=20, pady=(18, 10), sticky="ew")
+        Tooltip(head, "Latest imports, bulk edits and Excel/PDF exports.\n"
+                      "Consecutive edits of the same kind are grouped.")
+        self._ar_container = ctk.CTkFrame(c, fg_color="transparent")
+        self._ar_container.grid(row=1, column=0, padx=16, pady=(0, 14), sticky="nsew")
+        self._ar_container.grid_columnconfigure(1, weight=1)
 
     def _render_activity(self, rows: list[dict]):
         for w in self._ar_container.winfo_children():
             w.destroy()
 
         collapsed = _collapse_activity(rows)[:6]
-
         if not collapsed:
-            ctk.CTkLabel(
-                self._ar_container,
-                text="Sin actividad registrada todavía.\n"
-                     "Importá un PDF o editá productos para verla acá.",
-                font=font_small(), text_color=TEXT_SUBTLE, justify="left",
-            ).grid(row=0, column=0, padx=8, pady=18, sticky="w")
+            ctk.CTkLabel(self._ar_container,
+                         text="No activity yet — import a PDF or edit products to see it here.",
+                         font=font_small(), text_color=TEXT_SUBTLE, justify="left",
+                         wraplength=320).grid(row=0, column=0, columnspan=3, pady=10, sticky="w")
             return
 
         for i, entry in enumerate(collapsed):
-            icon, color = ACTIVITY_STYLE.get(entry["kind"], ("•", TEXT_MUTED))
-            row = ctk.CTkFrame(self._ar_container, fg_color="transparent")
-            row.grid(row=i, column=0, padx=2, pady=2, sticky="ew")
-            row.grid_columnconfigure(1, weight=1)
-
-            ctk.CTkLabel(
-                row, text=icon, width=22,
-                font=ctk.CTkFont(size=14), text_color=color,
-            ).grid(row=0, column=0, padx=(4, 6), pady=2, sticky="w")
-
-            ctk.CTkLabel(
-                row, text=entry["summary"],
-                font=font_small(), text_color=TEXT_HEADING, anchor="w",
-            ).grid(row=0, column=1, padx=2, pady=2, sticky="w")
-
-            ts_lbl = ctk.CTkLabel(
-                row, text=_humanize_delta(entry["ts"]),
-                font=ctk.CTkFont(size=10), text_color=TEXT_SUBTLE, anchor="e",
-            )
-            ts_lbl.grid(row=0, column=2, padx=(6, 6), pady=2, sticky="e")
-            # Exact timestamp on hover
+            badge = ctk.CTkFrame(self._ar_container, width=28, height=28, corner_radius=7,
+                                 fg_color=BG_ELEVATED)
+            badge.grid(row=i, column=0, pady=3, sticky="w")
+            badge.grid_propagate(False)
+            ctk.CTkLabel(badge, text="", image=icon(ACTIVITY_ICON.get(entry["kind"], "clock"),
+                                                     TEXT_MUTED, 14)).place(relx=0.5, rely=0.5, anchor="center")
+            ctk.CTkLabel(self._ar_container, text=entry["summary"], font=font_label(),
+                         text_color=TEXT_HEADING, anchor="w").grid(row=i, column=1, padx=10, sticky="w")
+            ts = ctk.CTkLabel(self._ar_container, text=_humanize_delta(entry["ts"]),
+                              font=font_small(), text_color=TEXT_SUBTLE, anchor="e")
+            ts.grid(row=i, column=2, sticky="e")
             try:
-                Tooltip(ts_lbl, _fmt_dt(entry["ts"]))
+                Tooltip(ts, _fmt_dt(entry["ts"]))
             except Exception:
                 pass
 
@@ -613,23 +431,28 @@ class DashboardFrame(ctk.CTkFrame):
             log.error(f"Dashboard data fetch failed: {e}")
             return
 
-        # Stat cards
-        stats = data.get("stats", {})
-        self._cards["total"].update_value(str(stats.get("total", 0)))
-        self._cards["active"].update_value(str(stats.get("active", 0)))
-        self._cards["inactive"].update_value(str(stats.get("inactive", 0)))
-        self._cards["discontinued"].update_value(str(stats.get("discontinued", 0)))
+        stats  = data.get("stats", {})
+        total  = int(stats.get("total", 0) or 0)
+        active = int(stats.get("active", 0) or 0)
+        share  = f"{active / total:.0%} of the catalog" if total else ""
+        self._cards["total"].update_value(fmt_int(total), "in the database")
+        self._cards["active"].update_value(fmt_int(active), share)
+        self._cards["inactive"].update_value(fmt_int(stats.get("inactive", 0)), "hidden from exports")
+        self._cards["discontinued"].update_value(fmt_int(stats.get("discontinued", 0)),
+                                                 "missing from the latest import")
 
-        # Última importación
-        self._render_last_import(data.get("last_import"))
+        last = data.get("last_import")
+        self._render_last_import(last)
+        self._subtitle.configure(
+            text=f"{fmt_int(total)} products · last import {_humanize_delta(last.get('started_at'))}"
+            if last else "Import a supplier PDF to get started"
+        )
 
-        # Top categorías + Salud
         self._render_top_categories(data.get("top_categories", []))
         health = data.get("health", {})
         self._missing_image_skus = health.get("missing_image_skus") or []
         self._render_health(health)
 
-        # Actividad reciente
         try:
             activity = self.controller.get_recent_activity(limit=30)
         except Exception:
@@ -638,66 +461,52 @@ class DashboardFrame(ctk.CTkFrame):
 
     def _render_last_import(self, last: Optional[dict]):
         if not last:
-            self._li_supplier.configure(text="Sin importaciones aún")
-            self._li_when.configure(text="Importá un PDF desde la solapa Importar PDF.")
-            self._li_badge.configure(text="", fg_color="transparent")
-            self._set_chip_value(self._li_chip_products, "—")
-            self._set_chip_value(self._li_chip_images, "—")
-            self._set_chip_value(self._li_chip_duration, "—")
+            self._li_supplier.configure(text="No imports yet")
+            self._li_when.configure(text="Import a supplier PDF from the Import PDF tab.")
+            set_pill(self._li_badge, "")
+            for v in self._li_stats.values():
+                v.configure(text="—")
             self._li_progress.set(0)
             self._li_pct_label.configure(text="—")
             return
 
-        # Status badge: derive from errors / warnings stored on session
-        errors_raw = last.get("errors_json") or "[]"
-        warns_raw  = last.get("warnings_json") or "[]"
         try:
-            import json as _json
-            n_err  = len(_json.loads(errors_raw))
-            n_warn = len(_json.loads(warns_raw))
+            n_err = len(json.loads(last.get("errors_json") or "[]"))
+            warns = json.loads(last.get("warnings_json") or "[]")
+            # Indented lines are details of the warning above them
+            n_warn = len([w for w in warns if not str(w).startswith(" ")])
         except Exception:
             n_err = n_warn = 0
 
-        if n_err > 0:
-            self._li_badge.configure(text="✗ ERRORES", text_color="#FFFFFF", fg_color=ACCENT_DANGER)
-        elif n_warn > 0:
-            self._li_badge.configure(text="⚠ ADVERTENCIAS", text_color="#FFFFFF", fg_color=ACCENT_WARNING)
+        if n_err:
+            set_pill(self._li_badge, f"{n_err} error{'s' if n_err > 1 else ''}", "danger")
+        elif n_warn:
+            set_pill(self._li_badge, f"{n_warn} note{'s' if n_warn > 1 else ''}", "warning")
         else:
-            self._li_badge.configure(text="✓ ÉXITO", text_color="#FFFFFF", fg_color=ACCENT_SUCCESS)
+            set_pill(self._li_badge, "Completed", "success")
 
-        # Supplier + when
         self._li_supplier.configure(text=last.get("supplier_name") or "—")
         started = last.get("started_at")
-        when_txt = f"{_humanize_delta(started)}  ·  {_fmt_dt(started)}"
-        self._li_when.configure(text=when_txt)
+        self._li_when.configure(text=f"{_humanize_delta(started)}  ·  {_fmt_dt(started)}")
 
-        # Chips
-        n_prod   = int(last.get("products_found", 0) or 0)
-        n_match  = int(last.get("images_matched", 0) or 0)
-        n_found  = int(last.get("images_found", 0) or 0)
-        self._set_chip_value(self._li_chip_products, str(n_prod))
-        self._set_chip_value(self._li_chip_images, f"{n_match}/{n_prod}")
+        n_prod  = int(last.get("products_found", 0) or 0)
+        n_match = int(last.get("images_matched", 0) or 0)
+        self._li_stats["products"].configure(text=fmt_int(n_prod))
+        self._li_stats["images"].configure(text=fmt_int(n_match))
 
-        duration = ""
+        duration = "—"
         try:
             ended = last.get("completed_at")
             if started and ended:
                 s = datetime.fromisoformat(started[:19]) if isinstance(started, str) else started
                 e = datetime.fromisoformat(ended[:19])   if isinstance(ended, str)   else ended
-                secs = (e - s).total_seconds()
-                duration = f"{secs:.1f}s"
+                duration = f"{(e - s).total_seconds():.1f} s"
         except Exception:
             pass
-        self._set_chip_value(self._li_chip_duration, duration or "—")
+        self._li_stats["duration"].configure(text=duration)
 
-        # Progress bar
         pct = (n_match / n_prod) if n_prod else 0
         self._li_progress.set(pct)
-        self._li_pct_label.configure(text=f"{int(pct * 100)}%")
-        # Progress color depending on quality
-        if pct >= 0.9:
-            self._li_progress.configure(progress_color=ACCENT_SUCCESS)
-        elif pct >= 0.7:
-            self._li_progress.configure(progress_color=ACCENT_WARNING)
-        else:
-            self._li_progress.configure(progress_color=ACCENT_DANGER)
+        self._li_pct_label.configure(text=f"{pct:.1%}")
+        self._li_progress.configure(
+            progress_color=ACCENT if pct >= 0.9 else (WARNING if pct >= 0.7 else DANGER))

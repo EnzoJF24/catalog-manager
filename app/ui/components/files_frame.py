@@ -1,6 +1,6 @@
 """
-FilesFrame: explorador de archivos generados (PDFs y Excels).
-Permite abrir o eliminar cualquier archivo sin salir de la aplicación.
+FilesFrame: browser for generated files (PDFs and Excels).
+Open or delete any file without leaving the application.
 """
 from __future__ import annotations
 import os
@@ -13,21 +13,23 @@ import customtkinter as ctk
 
 from app.core.app_controller import AppController
 from app.config.settings import settings
+from app.ui.icons import icon
 from app.ui.theme import (
-    BG_BASE, BG_CARD, BG_ELEVATED,
-    ACCENT_BLUE, ACCENT_BLUE_H,
-    ACCENT_DANGER, ACCENT_DANGER_H,
-    BTN_SECONDARY, BTN_SECONDARY_H,
+    BG_BASE, BG_ELEVATED, BG_HOVER, BORDER, ACCENT, ACCENT_SOFT, DANGER, DANGER_SOFT,
     TEXT_PRIMARY, TEXT_MUTED, TEXT_SUBTLE,
-    RADIUS_CARD,
-    font_title, font_label, font_small, font_bold,
+    PAGE_PADX, RADIUS_BUTTON, FONT_SEMIBOLD,
+    font_label, font_small,
+    card, page_header, ghost_button, segmented, fmt_int,
 )
+
+_TAB_PDF   = "PDF catalogs"
+_TAB_EXCEL = "Excel exports"
 
 
 def _human_size(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
-            return f"{n:.0f} {unit}"
+            return f"{n:.0f} {unit}" if unit in ("B", "KB") else f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} GB"
 
@@ -41,71 +43,60 @@ def _open_path(path: Path):
         else:
             subprocess.Popen(["xdg-open", str(path)])
     except Exception as e:
-        messagebox.showerror("Error al abrir", str(e))
+        messagebox.showerror("Could not open", str(e))
+
+
+def _row_button(parent, icon_name: str, tip_color: str, command, hover: str = BG_HOVER) -> ctk.CTkButton:
+    return ctk.CTkButton(parent, text="", image=icon(icon_name, tip_color, 16), width=32, height=32,
+                         corner_radius=RADIUS_BUTTON, fg_color="transparent", hover_color=hover,
+                         command=command)
 
 
 class FileCard(ctk.CTkFrame):
-    """Fila compacta que representa un archivo generado."""
+    """Compact row representing a generated file."""
 
     def __init__(self, parent, file_path: Path, on_delete, **kwargs):
-        super().__init__(parent, fg_color=BG_ELEVATED, corner_radius=6, **kwargs)
+        super().__init__(parent, fg_color="transparent", corner_radius=RADIUS_BUTTON, **kwargs)
         self.grid_columnconfigure(1, weight=1)
         self._path = file_path
 
-        ext   = file_path.suffix.lower()
-        icon  = "📄" if ext == ".pdf" else "📗" if ext in (".xlsx", ".xls") else "📁"
-        mtime = datetime.fromtimestamp(file_path.stat().st_mtime).strftime("%d/%m/%Y %H:%M")
-        size  = _human_size(file_path.stat().st_size)
+        is_pdf = file_path.suffix.lower() == ".pdf"
+        stat   = file_path.stat()
+        mtime  = datetime.fromtimestamp(stat.st_mtime).strftime("%m/%d/%Y %H:%M")
 
-        ctk.CTkLabel(self, text=icon, font=ctk.CTkFont(size=18), width=30).grid(
-            row=0, column=0, padx=(10, 6), pady=8
-        )
+        badge = ctk.CTkFrame(self, width=36, height=36, corner_radius=9, fg_color=ACCENT_SOFT)
+        badge.grid(row=0, column=0, rowspan=2, padx=(12, 12), pady=10)
+        badge.grid_propagate(False)
+        ctk.CTkLabel(badge, text="", image=icon("file_text" if is_pdf else "sheet", ACCENT, 18)).place(
+            relx=0.5, rely=0.5, anchor="center")
 
-        info = ctk.CTkFrame(self, fg_color="transparent")
-        info.grid(row=0, column=1, sticky="ew", pady=6)
-        info.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(self, text=file_path.name, font=ctk.CTkFont(family=FONT_SEMIBOLD, size=13),
+                     text_color=TEXT_PRIMARY, anchor="w").grid(row=0, column=1, sticky="sw")
+        ctk.CTkLabel(self, text=f"{mtime}  ·  {_human_size(stat.st_size)}", font=font_small(),
+                     text_color=TEXT_MUTED, anchor="w").grid(row=1, column=1, sticky="nw")
 
-        ctk.CTkLabel(
-            info, text=file_path.name,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=TEXT_PRIMARY, anchor="w",
-        ).grid(row=0, column=0, sticky="w")
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.grid(row=0, column=2, rowspan=2, padx=(6, 10))
+        _row_button(actions, "external", TEXT_MUTED, lambda: _open_path(file_path)).grid(row=0, column=0)
+        _row_button(actions, "folder", TEXT_MUTED, lambda: _open_path(file_path.parent)).grid(row=0, column=1)
+        _row_button(actions, "trash", DANGER, lambda: on_delete(file_path), hover=DANGER_SOFT).grid(row=0, column=2)
 
-        ctk.CTkLabel(
-            info,
-            text=f"{mtime}  ·  {size}",
-            font=font_small(), text_color=TEXT_MUTED, anchor="w",
-        ).grid(row=1, column=0, sticky="w")
+        for w in (self, badge):
+            w.bind("<Enter>", lambda e: self.configure(fg_color=BG_HOVER), add="+")
+        self.bind("<Leave>", self._on_leave, add="+")
+        self.bind("<Double-Button-1>", lambda e: _open_path(file_path), add="+")
 
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.grid(row=0, column=2, padx=(6, 10), pady=8)
-
-        ctk.CTkButton(
-            btn_frame, text="Abrir", width=74, height=28,
-            fg_color=ACCENT_BLUE, hover_color=ACCENT_BLUE_H,
-            font=font_small(), corner_radius=6,
-            command=lambda: _open_path(file_path),
-        ).grid(row=0, column=0, padx=2)
-
-        ctk.CTkButton(
-            btn_frame, text="📂 Carpeta", width=90, height=28,
-            fg_color=BTN_SECONDARY, hover_color=BTN_SECONDARY_H,
-            font=font_small(), corner_radius=6,
-            command=lambda: _open_path(file_path.parent),
-        ).grid(row=0, column=1, padx=2)
-
-        ctk.CTkButton(
-            btn_frame, text="✕", width=28, height=28,
-            fg_color=ACCENT_DANGER, hover_color=ACCENT_DANGER_H,
-            font=font_small(), corner_radius=6,
-            command=lambda: on_delete(file_path),
-        ).grid(row=0, column=2, padx=2)
+    def _on_leave(self, _e):
+        x, y = self.winfo_pointerxy()
+        under = self.winfo_containing(x, y)
+        if under is None or not str(under).startswith(str(self)):
+            self.configure(fg_color="transparent")
 
 
 class FilesFrame(ctk.CTkFrame):
     """
-    Muestra todos los PDFs y Excels generados.
-    Permite abrir, ir a la carpeta o eliminar individualmente.
+    Lists every generated PDF and Excel file.
+    Each one can be opened, shown in its folder or deleted.
     """
 
     def __init__(self, parent, controller: AppController):
@@ -118,73 +109,35 @@ class FilesFrame(ctk.CTkFrame):
 
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)
+        self.grid_rowconfigure(2, weight=1)
 
-        # Título
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, padx=24, pady=(24, 4), sticky="ew")
-        header.grid_columnconfigure(0, weight=1)
+        page_header(self, "Files", "Catalogs and price lists generated by the app.").grid(
+            row=0, column=0, padx=PAGE_PADX, pady=(26, 18), sticky="ew")
 
-        ctk.CTkLabel(
-            header, text="Archivos generados",
-            font=font_title(), text_color=TEXT_PRIMARY,
-        ).grid(row=0, column=0, sticky="w")
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=1, column=0, padx=PAGE_PADX, pady=(0, 12), sticky="ew")
+        bar.grid_columnconfigure(1, weight=1)
+        self._tab_var = ctk.StringVar(value=_TAB_PDF)
+        segmented(bar, [_TAB_PDF, _TAB_EXCEL], variable=self._tab_var,
+                  command=lambda v: self._switch_tab("pdf" if v == _TAB_PDF else "excel")).grid(
+            row=0, column=0, sticky="w")
+        self._count_label = ctk.CTkLabel(bar, text="", font=font_label(), text_color=TEXT_SUBTLE)
+        self._count_label.grid(row=0, column=1, padx=14, sticky="w")
+        ghost_button(bar, "Open folder", self._open_current_folder,
+                     icon=icon("folder", TEXT_MUTED, 15)).grid(row=0, column=2, sticky="e")
+        ghost_button(bar, "Refresh", self._refresh,
+                     icon=icon("refresh", TEXT_MUTED, 15)).grid(row=0, column=3, padx=(4, 0), sticky="e")
 
-        ctk.CTkButton(
-            header, text="🔄 Actualizar", width=110, height=32,
-            fg_color=BTN_SECONDARY, hover_color=BTN_SECONDARY_H,
-            font=font_small(),
-            command=self._refresh,
-        ).grid(row=0, column=1, sticky="e")
-
-        # Tabs
-        tab_row = ctk.CTkFrame(self, fg_color="transparent")
-        tab_row.grid(row=1, column=0, padx=24, pady=(8, 0), sticky="w")
-
-        self._tab_pdf = ctk.CTkButton(
-            tab_row, text="📄 PDFs generados", width=160, height=34,
-            corner_radius=8,
-            fg_color=BTN_SECONDARY, hover_color=BTN_SECONDARY_H,
-            font=font_label(),
-            command=lambda: self._switch_tab("pdf"),
-        )
-        self._tab_pdf.grid(row=0, column=0, padx=(0, 4))
-
-        self._tab_xls = ctk.CTkButton(
-            tab_row, text="📗 Excels generados", width=170, height=34,
-            corner_radius=8,
-            fg_color="transparent", hover_color=BTN_SECONDARY,
-            font=font_label(),
-            command=lambda: self._switch_tab("excel"),
-        )
-        self._tab_xls.grid(row=0, column=1, padx=4)
-
-        # Atajos de carpeta
-        short_row = ctk.CTkFrame(self, fg_color="transparent")
-        short_row.grid(row=2, column=0, padx=24, pady=(4, 8), sticky="w")
-
-        ctk.CTkButton(
-            short_row, text="📂 Abrir carpeta PDFs", width=160, height=28,
-            fg_color="transparent", hover_color=BG_CARD,
-            text_color=TEXT_MUTED, font=font_small(),
-            command=lambda: _open_path(settings.PDFS_DIR),
-        ).grid(row=0, column=0, padx=(0, 4))
-
-        ctk.CTkButton(
-            short_row, text="📂 Abrir carpeta Excels", width=170, height=28,
-            fg_color="transparent", hover_color=BG_CARD,
-            text_color=TEXT_MUTED, font=font_small(),
-            command=lambda: _open_path(settings.EXCELS_DIR),
-        ).grid(row=0, column=1, padx=4)
-
-        # Lista scrollable
-        self.list_frame = ctk.CTkScrollableFrame(
-            self, fg_color=BG_CARD, corner_radius=RADIUS_CARD,
-        )
-        self.list_frame.grid(row=3, column=0, padx=24, pady=(0, 16), sticky="nsew")
+        holder = card(self, row=2, column=0, padx=PAGE_PADX, pady=(0, 22), sticky="nsew")
+        holder.grid_columnconfigure(0, weight=1)
+        holder.grid_rowconfigure(0, weight=1)
+        self.list_frame = ctk.CTkScrollableFrame(holder, fg_color="transparent", corner_radius=0,
+                                                 scrollbar_button_color=BG_ELEVATED,
+                                                 scrollbar_button_hover_color=BG_HOVER)
+        self.list_frame.grid(row=0, column=0, padx=6, pady=6, sticky="nsew")
         self.list_frame.grid_columnconfigure(0, weight=1)
 
-    # ── Lógica ────────────────────────────────────────────────────────────────
+    # ── Logic ─────────────────────────────────────────────────────────────────
 
     def on_show(self):
         self._refresh()
@@ -192,51 +145,52 @@ class FilesFrame(ctk.CTkFrame):
     def on_hide(self):
         pass
 
+    def _current_folder(self) -> Path:
+        return settings.PDFS_DIR if self._tab == "pdf" else settings.EXCELS_DIR
+
+    def _open_current_folder(self):
+        _open_path(self._current_folder())
+
     def _switch_tab(self, tab: str):
         self._tab = tab
-        active_cfg   = dict(fg_color=BTN_SECONDARY, text_color=TEXT_PRIMARY)
-        inactive_cfg = dict(fg_color="transparent", text_color=TEXT_MUTED)
-        if tab == "pdf":
-            self._tab_pdf.configure(**active_cfg)
-            self._tab_xls.configure(**inactive_cfg)
-        else:
-            self._tab_pdf.configure(**inactive_cfg)
-            self._tab_xls.configure(**active_cfg)
         self._refresh()
 
     def _refresh(self):
         for w in self.list_frame.winfo_children():
             w.destroy()
 
-        if self._tab == "pdf":
-            folder = settings.PDFS_DIR
-            exts   = {".pdf"}
-        else:
-            folder = settings.EXCELS_DIR
-            exts   = {".xlsx", ".xls"}
-
+        folder = self._current_folder()
+        exts   = {".pdf"} if self._tab == "pdf" else {".xlsx", ".xls"}
         files = sorted(
             [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in exts],
             key=lambda f: f.stat().st_mtime,
             reverse=True,
         ) if folder.exists() else []
 
+        noun = "catalog" if self._tab == "pdf" else "export"
+        self._count_label.configure(text=f"{fmt_int(len(files))} {noun}{'s' if len(files) != 1 else ''}")
+
         if not files:
-            ctk.CTkLabel(
-                self.list_frame,
-                text="No hay archivos generados todavía.",
-                text_color=TEXT_SUBTLE, font=font_label(),
-            ).grid(row=0, column=0, padx=24, pady=40)
+            empty = ctk.CTkFrame(self.list_frame, fg_color="transparent")
+            empty.grid(row=0, column=0, pady=60)
+            ctk.CTkLabel(empty, text="", image=icon("folder", TEXT_SUBTLE, 32)).grid(row=0, column=0)
+            ctk.CTkLabel(empty, text="Nothing generated yet", font=ctk.CTkFont(family=FONT_SEMIBOLD, size=14),
+                         text_color=TEXT_PRIMARY).grid(row=1, column=0, pady=(10, 2))
+            ctk.CTkLabel(empty, text="Files created from the Catalog tab show up here.",
+                         font=font_label(), text_color=TEXT_MUTED).grid(row=2, column=0)
             return
 
         for i, f in enumerate(files):
-            card = FileCard(self.list_frame, f, on_delete=self._confirm_delete)
-            card.grid(row=i, column=0, padx=4, pady=3, sticky="ew")
+            if i:
+                ctk.CTkFrame(self.list_frame, height=1, fg_color=BORDER, corner_radius=0).grid(
+                    row=2 * i - 1, column=0, padx=12, sticky="ew")
+            FileCard(self.list_frame, f, on_delete=self._confirm_delete).grid(
+                row=2 * i, column=0, pady=1, sticky="ew")
 
     def _confirm_delete(self, path: Path):
         ok = messagebox.askyesno(
-            "Eliminar archivo",
-            f"¿Eliminar '{path.name}'?\nEsta acción no se puede deshacer.",
+            "Delete file",
+            f"Delete '{path.name}'?\nThis cannot be undone.",
         )
         if ok:
             try:

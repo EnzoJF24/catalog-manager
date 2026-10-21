@@ -36,11 +36,11 @@ COL_SKU_MAX_X    = 157.0
 COL_BRAND_MIN_X  = 157.0
 COL_BRAND_MAX_X  = 245.0
 COL_DESC_MIN_X   = 245.0
-COL_DESC_MAX_X   = 440.0   # recortado 5pts para que $ no caiga en descripción
-COL_PRICE_MIN_X  = 440.0   # bajado desde 445 → rescata los $ en x≈443
+COL_DESC_MAX_X   = 440.0   # trimmed 5 pts so the $ sign never falls into the description
+COL_PRICE_MIN_X  = 440.0   # lowered from 445 → recovers $ signs at x≈443
 
 PRICE_RE        = re.compile(r"\$\s*[\d.,]+")
-# Fallback: número argentino sin $ (ej: "131.928,30") — usado cuando $ está fuera del col
+# Fallback: Argentine-format number without $ (e.g. "131.928,30") — used when the $ falls outside the column
 PRICE_RE_LOOSE  = re.compile(r"\d{1,3}(?:[.,]\d{3})+,\d{2}|\d+,\d{2}")
 SKU_RE   = re.compile(r"^[A-Z]{1,6}\d{1,4}[A-Z0-9]{0,4}$")
 
@@ -66,7 +66,7 @@ class MayoristasIParser(BaseParser):
     def __init__(self, pdf_path: Path, output_dir: Path):
         super().__init__(pdf_path, output_dir)
         self._doc: Optional[fitz.Document] = None
-        # Productos que tuvieron SKU válido pero no se pudo extraer el precio
+        # Products with a valid SKU whose price could not be extracted
         self._skipped_products: list[dict] = []
 
     def _open_doc(self) -> fitz.Document:
@@ -95,12 +95,12 @@ class MayoristasIParser(BaseParser):
         try:
             doc = self._open_doc()
             if doc.page_count == 0:
-                return False, "El PDF no tiene páginas."
+                return False, "The PDF has no pages."
             page0_text = doc[0].get_text("text")
             if not any(kw in page0_text for kw in self.DETECTION_KEYWORDS):
                 return False, (
-                    f"No se encontraron palabras clave en la página 1 "
-                    f"— este PDF puede no corresponder a {self.SUPPLIER_NAME}."
+                    f"No detection keywords found on page 1 "
+                    f"— this PDF may not belong to {self.SUPPLIER_NAME}."
                 )
             return True, "OK"
         except Exception as e:
@@ -131,7 +131,7 @@ class MayoristasIParser(BaseParser):
         doc = self._open_doc()
         session.total_pages = doc.page_count
         products: list[Product] = []
-        current_category = "SIN CATEGORÍA"
+        current_category = "UNCATEGORIZED"
         # Populated here, consumed by extract_images — avoids double parse
         self._row_data_by_page: dict[int, list[tuple[str, float]]] = {}
 
@@ -144,11 +144,11 @@ class MayoristasIParser(BaseParser):
                 products.extend(page_products)
                 self._row_data_by_page[page_num] = row_data
                 log.debug(
-                    f"Pág {page_num + 1}/{doc.page_count}: "
-                    f"+{len(page_products)} productos (cat={current_category})"
+                    f"Page {page_num + 1}/{doc.page_count}: "
+                    f"+{len(page_products)} products (cat={current_category})"
                 )
             except Exception as e:
-                msg = f"Pág {page_num + 1} error: {e}"
+                msg = f"Page {page_num + 1} error: {e}"
                 session.errors.append(msg)
                 log.error(msg)
                 continue
@@ -157,14 +157,14 @@ class MayoristasIParser(BaseParser):
 
         if self._skipped_products:
             msg = (
-                f"{len(self._skipped_products)} producto(s) con SKU válido descartados "
-                f"por precio no detectado (ver logs para detalle)"
+                f"{len(self._skipped_products)} product(s) with a valid SKU discarded "
+                f"because no price was detected (see logs for details)"
             )
             session.warnings.append(msg)
             log.warning(msg)
             for s in self._skipped_products:
                 session.warnings.append(
-                    f"  SKIPPED pág {s['page']}: {s['sku']} — {s['desc'][:40]}"
+                    f"  SKIPPED page {s['page']}: {s['sku']} — {s['desc'][:40]}"
                 )
 
         return products
@@ -225,7 +225,7 @@ class MayoristasIParser(BaseParser):
                         else:
                             discard_log[reason] = discard_log.get(reason, 0) + 1
             except Exception as e:
-                log.error(f"Error en imágenes página {page_num}: {e}")
+                log.error(f"Image error on page {page_num}: {e}")
 
         product_images = list(best_by_sku.values())
 
@@ -241,12 +241,12 @@ class MayoristasIParser(BaseParser):
                 p.image_confidence  = pi.confidence
 
         log.info(
-            f"Imágenes: {total_found} encontradas, {len(product_images)} asociadas, "
-            f"{total_found - total_matched} descartadas "
-            f"(columna={discard_log.get('wrong_column',0)}, "
-            f"tamaño={discard_log.get('too_small',0)}, "
-            f"sin_fila={discard_log.get('no_row',0)}, "
-            f"baja_conf={discard_log.get('low_confidence',0)})"
+            f"Images: {total_found} found, {len(product_images)} matched, "
+            f"{total_found - total_matched} rejected "
+            f"(column={discard_log.get('wrong_column',0)}, "
+            f"size={discard_log.get('too_small',0)}, "
+            f"no_row={discard_log.get('no_row',0)}, "
+            f"low_conf={discard_log.get('low_confidence',0)})"
         )
         return product_images
 
@@ -396,11 +396,11 @@ class MayoristasIParser(BaseParser):
         self, row_words: list, category: str, page_num: int
     ) -> Optional[Product]:
         """
-        Extrae un producto de un grupo de palabras.
-        Estrategia de precio:
-          1. Buscar con PRICE_RE ($+digitos) en columna PRICE (x >= COL_PRICE_MIN_X=440)
-          2. Fallback: buscar número argentino (sin $) en columna PRICE
-          3. Si SKU válido pero precio imposible → loguear como skipped
+        Extract a product from a group of words.
+        Price strategy:
+          1. Look for PRICE_RE ($ + digits) in the PRICE column (x >= COL_PRICE_MIN_X=440)
+          2. Fallback: look for an Argentine-format number (no $) in the PRICE column
+          3. Valid SKU but no price found → log it as skipped
         """
         if not row_words:
             return None
@@ -423,23 +423,23 @@ class MayoristasIParser(BaseParser):
         price = 0.0
         price_text = " ".join(w[4] for w in price_words)
 
-        # Intento 1: regex primaria con $
+        # Attempt 1: primary regex with $
         m = PRICE_RE.search(price_text)
         if m:
             price = self._parse_price(m.group())
 
-        # Intento 2: fallback — número argentino sin $ (ej: "131.928,30")
+        # Attempt 2: fallback — Argentine-format number without $ (e.g. "131.928,30")
         if price <= 0:
             m2 = PRICE_RE_LOOSE.search(price_text)
             if m2:
                 price = self._parse_price(m2.group())
                 if price > 0:
                     log.debug(
-                        f"[FALLBACK PRICE] pág {page_num+1} SKU={sku_text} "
+                        f"[FALLBACK PRICE] page {page_num+1} SKU={sku_text} "
                         f"raw='{price_text.strip()}' → {price}"
                     )
 
-        # Intento 3: buscar número argentino en TODO el grupo ($ pudo caer en desc)
+        # Attempt 3: search the WHOLE group (the $ may have landed in the description)
         if price <= 0:
             all_text = " ".join(w[4] for w in row_words)
             m3 = PRICE_RE.search(all_text) or PRICE_RE_LOOSE.search(all_text)
@@ -447,21 +447,21 @@ class MayoristasIParser(BaseParser):
                 price = self._parse_price(m3.group())
                 if price > 0:
                     log.warning(
-                        f"[PRICE RESCUED full-scan] pág {page_num+1} SKU={sku_text} "
+                        f"[PRICE RESCUED full-scan] page {page_num+1} SKU={sku_text} "
                         f"→ {price}"
                     )
 
         if price <= 0:
             log.error(
-                f"[SKIPPED] pág {page_num+1} SKU={sku_text} desc='{desc_text[:40]}' "
-                f"— no se encontró precio. price_raw='{price_text}'"
+                f"[SKIPPED] page {page_num+1} SKU={sku_text} desc='{desc_text[:40]}' "
+                f"— no price found. price_raw='{price_text}'"
             )
             self._skipped_products.append({
                 "page":     page_num + 1,
                 "sku":      sku_text,
                 "desc":     desc_text,
                 "price_raw": price_text,
-                "reason":   "precio no detectado",
+                "reason":   "price not detected",
             })
             return None
 
@@ -565,7 +565,7 @@ class MayoristasIParser(BaseParser):
                 confidence=round(confidence, 3),
             ), ""
         except Exception as e:
-            log.warning(f"  Error al guardar imagen (xref={xref}): {e}")
+            log.warning(f"  Error saving image (xref={xref}): {e}")
             return None, "save_error"
 
     def __del__(self):

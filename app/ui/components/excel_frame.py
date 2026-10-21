@@ -1,6 +1,6 @@
 """
-Catálogo frame — genera el Excel (snapshot) y el PDF comercial.
-Incluye la configuración visual del PDF (marca, colores, layout).
+Catalog frame — generates the Excel snapshot and the commercial PDF.
+Includes the PDF's visual settings (company, colors, layout) with a live preview.
 """
 from __future__ import annotations
 import os
@@ -15,16 +15,14 @@ import customtkinter as ctk
 
 from app.config.settings import settings
 from app.core.app_controller import AppController
+from app.ui.icons import icon
 from app.ui.theme import (
-    BG_BASE, BG_CARD, BG_ELEVATED, BG_DEEPEST,
-    ACCENT_PRIMARY, ACCENT_PRIMARY_H,
-    ACCENT_BLUE, ACCENT_BLUE_H,
-    ACCENT_SUCCESS,
-    ACCENT_WARNING,
-    ACCENT_PURPLE, ACCENT_PURPLE_H,
-    TEXT_PRIMARY, TEXT_HEADING, TEXT_MUTED, TEXT_SUBTLE,
-    RADIUS_CARD, RADIUS_BUTTON,
-    font_label, font_small, font_bold, font_mono,
+    BG_BASE, BG_ELEVATED, BG_DEEPEST, BORDER, BORDER_STRONG,
+    ACCENT, TEXT_PRIMARY, TEXT_HEADING, TEXT_MUTED, TEXT_SUBTLE,
+    PAGE_PADX, RADIUS_BUTTON, FONT_SEMIBOLD, FONT_FAMILY,
+    font_label, font_small, font_mono,
+    card, section_title, page_header, primary_button, secondary_button, icon_button,
+    entry, option_menu, field_caption, pill, set_pill, fmt_int,
 )
 from app.ui.components.spinner import Spinner
 from app.ui.components.tooltip import Tooltip
@@ -41,7 +39,7 @@ def _open_file(path: Path):
         else:
             subprocess.Popen(["xdg-open", str(path)])
     except Exception as e:
-        messagebox.showerror("Error al abrir archivo", str(e))
+        messagebox.showerror("Could not open file", str(e))
 
 
 def _humanize_delta(then: datetime) -> str:
@@ -50,23 +48,23 @@ def _humanize_delta(then: datetime) -> str:
     delta = datetime.now() - then
     secs  = int(delta.total_seconds())
     if secs < 60:
-        return "hace unos segundos"
+        return "a few seconds ago"
     mins = secs // 60
     if mins < 60:
-        return f"hace {mins} min"
+        return f"{mins} min ago"
     hours = mins // 60
     if hours < 24:
-        return f"hace {hours} h"
+        return f"{hours} h ago"
     days = hours // 24
     if days == 1:
-        return "hace 1 día"
+        return "1 day ago"
     if days < 30:
-        return f"hace {days} días"
-    return "hace más de 1 mes"
+        return f"{days} days ago"
+    return "over 1 month ago"
 
 
-def _safe_color(value: str) -> str:
-    """Return a valid hex color or TEXT_SUBTLE as fallback."""
+def _safe_color(value: str, fallback: str = TEXT_SUBTLE) -> str:
+    """Return a valid hex color or the fallback."""
     v = value.strip()
     if v.startswith("#") and len(v) in (4, 7):
         try:
@@ -74,55 +72,111 @@ def _safe_color(value: str) -> str:
             return v
         except ValueError:
             pass
-    return TEXT_SUBTLE
+    return fallback
 
 
 # ── Inline color picker (compact, single row) ────────────────────────────────
 
 class InlineColorPicker(ctk.CTkFrame):
-    """Compact color picker: hex entry + swatch + button — all in one horizontal row."""
+    """Hex entry + swatch button that opens the system colour chooser."""
 
     def __init__(self, parent, initial: str, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
         self._var = ctk.StringVar(value=initial)
 
-        self._entry = ctk.CTkEntry(self, textvariable=self._var, width=90, height=28)
-        self._entry.grid(row=0, column=0, padx=(0, 4))
-
-        self._swatch = ctk.CTkLabel(
-            self, text="", width=28, height=28,
-            corner_radius=6, fg_color=_safe_color(initial),
+        self._swatch = ctk.CTkButton(
+            self, text="", width=34, height=34, corner_radius=RADIUS_BUTTON,
+            fg_color=_safe_color(initial), hover_color=_safe_color(initial),
+            border_width=1, border_color=BORDER_STRONG, command=self._open_picker,
         )
-        self._swatch.grid(row=0, column=1, padx=2)
+        self._swatch.grid(row=0, column=0, padx=(0, 8))
+        entry(self, self._var, width=104).grid(row=0, column=1)
 
-        ctk.CTkButton(
-            self, text="🎨", width=34, height=28,
-            fg_color=BG_ELEVATED, hover_color=ACCENT_BLUE,
-            font=ctk.CTkFont(size=12), corner_radius=6,
-            command=self._open_picker,
-        ).grid(row=0, column=2, padx=(2, 0))
+        self._var.trace_add("write", lambda *_: self._sync_swatch())
 
-        self._var.trace_add("write", lambda *_: self._swatch.configure(
-            fg_color=_safe_color(self._var.get())
-        ))
+    @property
+    def var(self) -> ctk.StringVar:
+        return self._var
 
     def get(self) -> str:
         return self._var.get().strip()
 
+    def _sync_swatch(self):
+        c = _safe_color(self._var.get())
+        self._swatch.configure(fg_color=c, hover_color=c)
+
     def _open_picker(self):
-        initial = _safe_color(self._var.get())
         result = colorchooser.askcolor(
-            color=initial, title="Elegir color",
+            color=_safe_color(self._var.get()), title="Choose color",
             parent=self.winfo_toplevel(),
         )
         if result and result[1]:
             self._var.set(result[1].upper())
 
 
-# ── Catálogo frame ───────────────────────────────────────────────────────────
+# ── Live PDF preview ─────────────────────────────────────────────────────────
+
+class CatalogPreview(ctk.CTkFrame):
+    """Miniature of a catalog page reflecting the current branding settings."""
+
+    def __init__(self, parent):
+        super().__init__(parent, fg_color="#FFFFFF", corner_radius=6, width=250, height=320,
+                         border_width=1, border_color=BORDER)
+        self.grid_propagate(False)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        self._header = ctk.CTkFrame(self, height=22, corner_radius=0)
+        self._header.grid(row=0, column=0, sticky="ew", padx=1, pady=(1, 0))
+        self._header.grid_propagate(False)
+        self._header_lbl = ctk.CTkLabel(self._header, text="", text_color="#FFFFFF",
+                                        font=ctk.CTkFont(family=FONT_SEMIBOLD, size=9), anchor="w")
+        self._header_lbl.place(x=10, rely=0.5, anchor="w")
+
+        self._category = ctk.CTkFrame(self, height=16, corner_radius=4)
+        self._category.grid(row=1, column=0, sticky="ew", padx=12, pady=(12, 8))
+        self._category.grid_propagate(False)
+        ctk.CTkLabel(self._category, text="VALVES", text_color="#FFFFFF",
+                     font=ctk.CTkFont(family=FONT_SEMIBOLD, size=8)).place(x=8, rely=0.5, anchor="w")
+
+        self._grid = ctk.CTkFrame(self, fg_color="transparent")
+        self._grid.grid(row=2, column=0, sticky="nsew", padx=12)
+
+        self._footer = ctk.CTkFrame(self, height=16, corner_radius=0)
+        self._footer.grid(row=3, column=0, sticky="ew", padx=1, pady=(0, 1))
+
+        self._prices = ["$23.48", "$27.40", "$27.99", "$30.30", "$23.84", "$28.42"]
+
+    def render(self, company: str, primary: str, secondary: str, per_row: int):
+        primary   = _safe_color(primary, ACCENT)
+        secondary = _safe_color(secondary, "#0B2E44")
+        self._header.configure(fg_color=primary)
+        self._header_lbl.configure(text=(company or "My Company").upper()[:34])
+        self._category.configure(fg_color=primary)
+        self._footer.configure(fg_color=secondary)
+
+        for w in self._grid.winfo_children():
+            w.destroy()
+        per_row = max(1, min(3, per_row))
+        rows = {1: 2, 2: 2, 3: 3}[per_row]
+        for c in range(per_row):
+            self._grid.grid_columnconfigure(c, weight=1, uniform="tile")
+        for i in range(per_row * rows):
+            tile = ctk.CTkFrame(self._grid, fg_color="transparent")
+            tile.grid(row=i // per_row, column=i % per_row, padx=3, pady=3, sticky="nsew")
+            tile.grid_columnconfigure(0, weight=1)
+            ctk.CTkFrame(tile, fg_color="#E9ECEF", corner_radius=3,
+                         height={1: 70, 2: 52, 3: 34}[per_row]).grid(row=0, column=0, sticky="ew")
+            ctk.CTkFrame(tile, fg_color="#C9CED6", corner_radius=2, height=4).grid(
+                row=1, column=0, padx=8, pady=(5, 2), sticky="ew")
+            ctk.CTkLabel(tile, text=self._prices[i % len(self._prices)], text_color=primary,
+                         font=ctk.CTkFont(family=FONT_SEMIBOLD, size=9), height=14).grid(row=2, column=0)
+
+
+# ── Catalog frame ────────────────────────────────────────────────────────────
 
 class ExcelFrame(ctk.CTkFrame):
-    """Solapa Catálogo — genera Excel/PDF + configura la apariencia del PDF."""
+    """Catalog tab — generates Excel/PDF + configures the PDF's appearance."""
 
     def __init__(self, parent, controller: AppController,
                  navigate_cb: Optional[Callable[[str], None]] = None):
@@ -135,164 +189,101 @@ class ExcelFrame(ctk.CTkFrame):
 
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)   # console gets remaining height
+        self.grid_columnconfigure(1, weight=0)
+        self.grid_rowconfigure(3, weight=1)
 
-        # ── Row 0: status bar ────────────────────────────────────────────────
-        self._status_bar = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=RADIUS_CARD)
-        self._status_bar.grid(row=0, column=0, padx=20, pady=(14, 6), sticky="ew")
-        self._status_bar.grid_columnconfigure(1, weight=1)
-
-        self._lbl_status = ctk.CTkLabel(
-            self._status_bar, text="Cargando estado…",
-            font=font_label(), text_color=TEXT_HEADING, anchor="w",
-        )
-        self._lbl_status.grid(row=0, column=0, columnspan=2, padx=14, pady=10, sticky="w")
-
-        self._badge = ctk.CTkLabel(
-            self._status_bar, text="",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            corner_radius=6, fg_color="transparent",
-            padx=8, pady=2,
-        )
-        self._badge.grid(row=0, column=2, padx=(0, 14), pady=10, sticky="e")
-        # Tooltip — text rewritten per state inside _refresh_status()
-        self._badge_tooltip = Tooltip(self._badge, "", wraplength=400)
-
-        # ── Row 1: actions card ──────────────────────────────────────────────
-        actions = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=RADIUS_CARD)
-        actions.grid(row=1, column=0, padx=20, pady=6, sticky="ew")
-        actions.grid_columnconfigure(1, weight=1)   # spacer — checkbox left, buttons right
-
-        # Checkbox (left)
+        head = page_header(self, "Catalog", "Export the price list to Excel or publish the PDF catalog.")
+        head.grid(row=0, column=0, columnspan=2, padx=PAGE_PADX, pady=(26, 18), sticky="ew")
+        actions = ctk.CTkFrame(head, fg_color="transparent")
+        actions.grid(row=0, column=1, rowspan=2, sticky="e")
         self.active_only_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
-            actions, text="Solo activos",
-            variable=self.active_only_var,
-            text_color=TEXT_MUTED, font=font_small(),
-            checkbox_width=18, checkbox_height=18,
-        ).grid(row=0, column=0, padx=16, pady=14, sticky="w")
+            actions, text="Active only", variable=self.active_only_var,
+            font=font_label(), text_color=TEXT_MUTED,
+            checkbox_width=18, checkbox_height=18, corner_radius=5, border_width=1,
+            fg_color=ACCENT, border_color=BORDER_STRONG, hover_color=BG_ELEVATED,
+        ).grid(row=0, column=0, padx=(0, 16))
+        self._export_btn = secondary_button(actions, "Export Excel", self._export,
+                                            icon=icon("sheet", TEXT_HEADING, 15), width=130)
+        self._export_btn.grid(row=0, column=1, padx=(0, 8))
+        self._pdf_btn = primary_button(actions, "Generate PDF", self._gen_pdf,
+                                       icon=icon("file_text", "#FFFFFF", 15), width=140)
+        self._pdf_btn.grid(row=0, column=2)
 
-        # Buttons (right) — fixed width so they never stretch
-        btn_box = ctk.CTkFrame(actions, fg_color="transparent")
-        btn_box.grid(row=0, column=2, padx=(0, 14), pady=10, sticky="e")
+        # ── Status strip ─────────────────────────────────────────────────────
+        self._status_bar = card(self, row=1, column=0, columnspan=2, padx=PAGE_PADX, pady=(0, 12), sticky="ew")
+        self._status_bar.grid_columnconfigure(1, weight=1)
+        self._action_spinner = Spinner(self._status_bar, icon_color=ACCENT)
+        self._action_spinner.grid(row=0, column=0, padx=(16, 0), pady=10, sticky="w")
+        self._lbl_status = ctk.CTkLabel(self._status_bar, text="Loading status…", font=font_label(),
+                                        text_color=TEXT_HEADING, anchor="w")
+        self._lbl_status.grid(row=0, column=1, padx=(20, 8), pady=12, sticky="w")
+        self._badge = pill(self._status_bar)
+        self._badge.grid(row=0, column=2, padx=16, sticky="e")
+        self._badge_tooltip = Tooltip(self._badge, "", wraplength=400)
 
-        self._export_btn = ctk.CTkButton(
-            btn_box, text="📥  Descargar Excel",
-            height=38, width=200,
-            fg_color=ACCENT_BLUE, hover_color=ACCENT_BLUE_H,
-            font=font_bold(), corner_radius=RADIUS_BUTTON,
-            command=self._export,
-        )
-        self._export_btn.grid(row=0, column=0, padx=(0, 8))
+        # ── Settings + preview ───────────────────────────────────────────────
+        cfg = card(self, row=2, column=0, padx=(PAGE_PADX, 6), sticky="nsew")
+        cfg.grid_columnconfigure((0, 1), weight=1, uniform="cfg")
+        section_title(cfg, "PDF appearance", "applies to the next generated PDF").grid(
+            row=0, column=0, columnspan=2, padx=20, pady=(18, 14), sticky="ew")
 
-        self._pdf_btn = ctk.CTkButton(
-            btn_box, text="🚀  Generar PDF",
-            height=38, width=190,
-            fg_color=ACCENT_PURPLE, hover_color=ACCENT_PURPLE_H,
-            font=font_bold(), corner_radius=RADIUS_BUTTON,
-            command=self._gen_pdf,
-        )
-        self._pdf_btn.grid(row=0, column=1)
+        self.company_var = ctk.StringVar(value=self.controller.get_setting("company_name", "My Company"))
+        self.slogan_var  = ctk.StringVar(value=self.controller.get_setting("company_slogan", "Product Catalog"))
+        self.cols_var    = ctk.StringVar(value=self.controller.get_setting("products_per_row", "2"))
 
-        # Shared spinner (below the toolbar row, left-aligned)
-        self._action_spinner = Spinner(actions, icon_color=ACCENT_BLUE)
-        self._action_spinner.grid(row=1, column=0, columnspan=3,
-                                   padx=14, pady=(0, 6), sticky="w")
+        def field(row, col, caption, build, span=1):
+            cell = ctk.CTkFrame(cfg, fg_color="transparent")
+            cell.grid(row=row, column=col, columnspan=span,
+                      padx=(20 if col == 0 else 8, 20 if col + span == 2 else 8), pady=(0, 12), sticky="ew")
+            cell.grid_columnconfigure(0, weight=1)
+            field_caption(cell, caption).grid(row=0, column=0, sticky="w", pady=(0, 4))
+            w = build(cell)
+            w.grid(row=1, column=0, sticky="w" if isinstance(w, (InlineColorPicker, ctk.CTkOptionMenu)) else "ew")
+            return w
 
-        # ── Row 2: PDF config card ───────────────────────────────────────────
-        cfg = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=RADIUS_CARD)
-        cfg.grid(row=2, column=0, padx=20, pady=6, sticky="ew")
-        cfg.grid_columnconfigure(1, weight=1)
-        cfg.grid_columnconfigure(3, weight=1)
+        field(1, 0, "Company name", lambda p: entry(p, self.company_var))
+        field(1, 1, "Tagline",      lambda p: entry(p, self.slogan_var))
+        self._color_primary = field(2, 0, "Primary color", lambda p: InlineColorPicker(
+            p, self.controller.get_setting("primary_color", "#C0392B")))
+        self._color_secondary = field(2, 1, "Secondary color", lambda p: InlineColorPicker(
+            p, self.controller.get_setting("secondary_color", "#2C3E50")))
+        field(3, 0, "Products per row", lambda p: option_menu(p, self.cols_var, ["1", "2", "3"], width=90))
 
-        # Header
-        ctk.CTkLabel(
-            cfg, text="🎨  Configuración del catálogo PDF",
-            font=ctk.CTkFont(size=14, weight="bold"), text_color=ACCENT_PRIMARY,
-        ).grid(row=0, column=0, columnspan=4, padx=14, pady=(12, 4), sticky="w")
+        save_row = ctk.CTkFrame(cfg, fg_color="transparent")
+        save_row.grid(row=4, column=0, columnspan=2, padx=20, pady=(4, 18), sticky="ew")
+        save_row.grid_columnconfigure(0, weight=1)
+        secondary_button(save_row, "Save settings", self._save_pdf_config,
+                         icon=icon("save", TEXT_HEADING, 15), width=140).grid(row=0, column=1, sticky="e")
 
-        ctk.CTkFrame(cfg, height=1, fg_color=BG_ELEVATED).grid(
-            row=1, column=0, columnspan=4, padx=14, pady=(0, 8), sticky="ew"
-        )
+        prev_card = card(self, row=2, column=1, padx=(6, PAGE_PADX), sticky="nsew")
+        prev_card.grid_columnconfigure(0, weight=1)
+        section_title(prev_card, "Preview").grid(row=0, column=0, padx=20, pady=(18, 12), sticky="ew")
+        self._preview = CatalogPreview(prev_card)
+        self._preview.grid(row=1, column=0, padx=20, pady=(0, 20))
 
-        # Nombre empresa | Slogan
-        ctk.CTkLabel(
-            cfg, text="Nombre empresa:", width=116,
-            font=font_small(), text_color=TEXT_MUTED, anchor="e",
-        ).grid(row=2, column=0, padx=(14, 6), pady=4, sticky="e")
-        self.company_var = ctk.StringVar(
-            value=self.controller.get_setting("company_name", "Mi Empresa")
-        )
-        ctk.CTkEntry(cfg, textvariable=self.company_var, height=28).grid(
-            row=2, column=1, padx=(0, 14), pady=4, sticky="ew"
-        )
-        ctk.CTkLabel(
-            cfg, text="Slogan:", width=72,
-            font=font_small(), text_color=TEXT_MUTED, anchor="e",
-        ).grid(row=2, column=2, padx=(0, 6), pady=4, sticky="e")
-        self.slogan_var = ctk.StringVar(
-            value=self.controller.get_setting("company_slogan", "Catálogo de Productos")
-        )
-        ctk.CTkEntry(cfg, textvariable=self.slogan_var, height=28).grid(
-            row=2, column=3, padx=(0, 14), pady=4, sticky="ew"
-        )
+        for v in (self.company_var, self.cols_var, self._color_primary.var, self._color_secondary.var):
+            v.trace_add("write", lambda *_: self._refresh_preview())
+        self._refresh_preview()
 
-        # Color primario | Color secundario
-        ctk.CTkLabel(
-            cfg, text="Color primario:", width=116,
-            font=font_small(), text_color=TEXT_MUTED, anchor="e",
-        ).grid(row=3, column=0, padx=(14, 6), pady=4, sticky="e")
-        self._color_primary = InlineColorPicker(
-            cfg, self.controller.get_setting("primary_color", "#C0392B")
-        )
-        self._color_primary.grid(row=3, column=1, padx=(0, 14), pady=4, sticky="w")
-
-        ctk.CTkLabel(
-            cfg, text="Color secundario:", width=72,
-            font=font_small(), text_color=TEXT_MUTED, anchor="e",
-        ).grid(row=3, column=2, padx=(0, 6), pady=4, sticky="e")
-        self._color_secondary = InlineColorPicker(
-            cfg, self.controller.get_setting("secondary_color", "#2C3E50")
-        )
-        self._color_secondary.grid(row=3, column=3, padx=(0, 14), pady=4, sticky="w")
-
-        # Productos por fila (left) | Guardar (right, fixed width)
-        ctk.CTkLabel(
-            cfg, text="Productos por fila:", width=116,
-            font=font_small(), text_color=TEXT_MUTED, anchor="e",
-        ).grid(row=4, column=0, padx=(14, 6), pady=(4, 14), sticky="e")
-        self.cols_var = ctk.StringVar(
-            value=self.controller.get_setting("products_per_row", "2")
-        )
-        ctk.CTkOptionMenu(
-            cfg, variable=self.cols_var, values=["1", "2", "3"],
-            width=70, height=28,
-        ).grid(row=4, column=1, padx=(0, 14), pady=(4, 14), sticky="w")
-
-        ctk.CTkButton(
-            cfg, text="💾  Guardar configuración",
-            height=32, width=220,
-            fg_color=ACCENT_PRIMARY, hover_color=ACCENT_PRIMARY_H,
-            font=font_bold(), corner_radius=8,
-            command=self._save_pdf_config,
-        ).grid(row=4, column=2, columnspan=2, padx=(0, 14), pady=(4, 14), sticky="e")
-
-        # ── Row 3: console log ───────────────────────────────────────────────
-        log_card = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=RADIUS_CARD)
-        log_card.grid(row=3, column=0, padx=20, pady=(6, 14), sticky="nsew")
+        # ── Output log ───────────────────────────────────────────────────────
+        log_card = card(self, row=3, column=0, columnspan=2, padx=PAGE_PADX, pady=(12, 22), sticky="nsew")
         log_card.grid_columnconfigure(0, weight=1)
         log_card.grid_rowconfigure(1, weight=1)
-
-        ctk.CTkLabel(
-            log_card, text="📜  Registro de operaciones",
-            font=ctk.CTkFont(size=13, weight="bold"), text_color=TEXT_HEADING,
-        ).grid(row=0, column=0, padx=14, pady=(10, 4), sticky="w")
-
+        section_title(log_card, "Output").grid(row=0, column=0, padx=20, pady=(16, 8), sticky="ew")
         self.result_log = ctk.CTkTextbox(
-            log_card, fg_color=BG_DEEPEST, text_color=ACCENT_SUCCESS,
-            font=font_mono(),
+            log_card, fg_color=BG_DEEPEST, text_color=TEXT_MUTED, font=font_mono(),
+            border_width=1, border_color=BORDER, corner_radius=RADIUS_BUTTON, height=90,
         )
-        self.result_log.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
+        self.result_log.grid(row=1, column=0, padx=20, pady=(0, 18), sticky="nsew")
+
+    def _refresh_preview(self):
+        try:
+            per_row = int(self.cols_var.get() or 2)
+        except ValueError:
+            per_row = 2
+        self._preview.render(self.company_var.get(), self._color_primary.get(),
+                             self._color_secondary.get(), per_row)
 
     # ── Status refresh ────────────────────────────────────────────────────────
 
@@ -303,63 +294,40 @@ class ExcelFrame(ctk.CTkFrame):
         except Exception:
             return
 
-        total   = stats.get("total", 0)
         db_mod  = status["last_db_mod"]
         excel_g = status["last_excel_gen"]
-
-        parts = [f"📦 {total} productos"]
-        if db_mod:
-            parts.append(f"🕐 Última modificación: {_humanize_delta(db_mod)}")
-        else:
-            parts.append("🕐 Sin modificaciones")
-        if excel_g:
-            parts.append(f"📥 Excel: {_humanize_delta(excel_g)}")
-        else:
-            parts.append("📥 Sin Excel generado")
-
+        parts = [f"{fmt_int(stats.get('total', 0))} products"]
+        parts.append(f"last change {_humanize_delta(db_mod)}" if db_mod else "no changes yet")
+        parts.append(f"Excel exported {_humanize_delta(excel_g)}" if excel_g else "no Excel exported yet")
         self._lbl_status.configure(text="  ·  ".join(parts))
 
         if status["is_stale"]:
-            self._badge.configure(
-                text="⚠ DESACTUALIZADO", text_color="#FFFFFF",
-                fg_color=ACCENT_WARNING,
-            )
-            self._status_bar.configure(border_color=ACCENT_WARNING, border_width=1)
+            set_pill(self._badge, "Excel out of date", "warning")
             self._badge_tooltip.update_text(
-                "El Excel descargado quedó desactualizado.\n\n"
-                "Se realizaron cambios en la base de datos (importaciones o ediciones)\n"
-                "después de la última generación del archivo.\n\n"
-                "Volvé a descargarlo para tener los datos al día."
+                "The database changed (imports or edits) after the Excel file\n"
+                "was last exported. Export it again to get up-to-date data."
             )
         elif status["has_excel"]:
-            self._badge.configure(
-                text="✓ ACTUALIZADO", text_color="#FFFFFF",
-                fg_color=ACCENT_SUCCESS,
-            )
-            self._status_bar.configure(border_color=ACCENT_SUCCESS, border_width=1)
-            self._badge_tooltip.update_text(
-                "El Excel está al día con la base de datos.\n\n"
-                "No se hicieron cambios desde la última generación."
-            )
+            set_pill(self._badge, "Excel up to date", "success")
+            self._badge_tooltip.update_text("Nothing has changed since the Excel file was last exported.")
         else:
-            self._badge.configure(text="", fg_color="transparent")
-            self._status_bar.configure(border_width=0)
+            set_pill(self._badge, "")
             self._badge_tooltip.update_text("")
 
     # ── Save PDF config ───────────────────────────────────────────────────────
 
     def _save_pdf_config(self):
         try:
-            self.controller.set_setting("company_name",   self.company_var.get().strip())
-            self.controller.set_setting("company_slogan", self.slogan_var.get().strip())
-            self.controller.set_setting("primary_color",   self._color_primary.get())
-            self.controller.set_setting("secondary_color", self._color_secondary.get())
+            self.controller.set_setting("company_name",     self.company_var.get().strip())
+            self.controller.set_setting("company_slogan",   self.slogan_var.get().strip())
+            self.controller.set_setting("primary_color",    self._color_primary.get())
+            self.controller.set_setting("secondary_color",  self._color_secondary.get())
             self.controller.set_setting("products_per_row", self.cols_var.get())
-            self._log("✓  Configuración guardada. Se aplicará en la próxima generación de PDF.")
+            self._log("Settings saved — they apply to the next generated PDF.")
             messagebox.showinfo(
-                "Guardado",
-                "Configuración guardada.\n"
-                "Los cambios se aplicarán en la próxima generación del PDF.",
+                "Saved",
+                "Settings saved.\n"
+                "Changes will apply the next time the PDF is generated.",
             )
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -367,8 +335,8 @@ class ExcelFrame(ctk.CTkFrame):
     # ── Export Excel ──────────────────────────────────────────────────────────
 
     def _export(self):
-        self._set_busy(True, blue=True)
-        self._action_spinner.start("Generando Excel...")
+        self._set_busy(True)
+        self._action_spinner.start("Generating Excel…")
 
         def _run():
             try:
@@ -383,19 +351,19 @@ class ExcelFrame(ctk.CTkFrame):
         self._action_spinner.stop()
         self._set_busy(False)
         self._refresh_status()
-        self._log(f"✓  Excel guardado: {settings.display_path(path)}")
-        abrir = messagebox.askyesno(
-            "Excel generado",
-            f"Archivo guardado en:\n{path}\n\n¿Querés abrirlo ahora?",
+        self._log(f"Excel saved   {settings.display_path(path)}")
+        open_now = messagebox.askyesno(
+            "Excel generated",
+            f"File saved to:\n{path}\n\nOpen it now?",
         )
-        if abrir:
+        if open_now:
             _open_file(path)
 
     # ── Generate PDF ──────────────────────────────────────────────────────────
 
     def _gen_pdf(self):
-        self._set_busy(True, blue=False)
-        self._action_spinner.start("Generando catálogo PDF...")
+        self._set_busy(True)
+        self._action_spinner.start("Generating PDF catalog…")
 
         def _run():
             try:
@@ -409,34 +377,33 @@ class ExcelFrame(ctk.CTkFrame):
     def _pdf_done(self, path: Path):
         self._action_spinner.stop()
         self._set_busy(False)
-        self._log(f"✓  PDF guardado: {settings.display_path(path)}")
-        abrir = messagebox.askyesno(
-            "Catálogo PDF generado",
-            f"Catálogo guardado en:\n{path}\n\n¿Querés abrirlo ahora?",
+        self._refresh_status()
+        self._log(f"PDF saved     {settings.display_path(path)}")
+        open_now = messagebox.askyesno(
+            "PDF catalog generated",
+            f"Catalog saved to:\n{path}\n\nOpen it now?",
         )
-        if abrir:
+        if open_now:
             _open_file(path)
 
     def _generic_error(self, context: str, error: str):
         self._action_spinner.stop()
         self._set_busy(False)
-        self._log(f"✗  Error ({context}): {error}")
+        self._refresh_status()
+        self._log(f"error ({context})  {error}")
         messagebox.showerror(f"Error — {context}", error)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _set_busy(self, busy: bool, blue: bool = True):
+    def _set_busy(self, busy: bool):
         state = "disabled" if busy else "normal"
         self._export_btn.configure(state=state)
         self._pdf_btn.configure(state=state)
-        # Spinner colour matches the active action
         if busy:
-            self._action_spinner._icon.configure(
-                text_color=ACCENT_BLUE if blue else ACCENT_PURPLE
-            )
+            self._lbl_status.configure(text="")
 
     def _log(self, msg: str):
-        ts = datetime.now().strftime("[%H:%M:%S] ")
+        ts = datetime.now().strftime("%H:%M:%S  ")
         self.result_log.insert("end", ts + msg + "\n")
         self.result_log.see("end")
 

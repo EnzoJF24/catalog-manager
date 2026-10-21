@@ -444,7 +444,7 @@ class DatabaseManager:
     def get_products_page(
         self,
         *,
-        filter_mode: str = "Todos",
+        filter_mode: str = "All",
         search: str = "",
         health_filter: str = "",
         sku_list: list = [],          # noqa: B006 — intentional mutable default
@@ -454,7 +454,7 @@ class DatabaseManager:
         """
         Return (rows, total_count) for a single page of products.
 
-        filter_mode:   'Todos' | 'Activos' | 'Inactivos' | 'Discontinuados'
+        filter_mode:   'All' | 'Active' | 'Inactive' | 'Discontinued'
         search:        free text matched against sku/description/brand/category
         health_filter: '' | 'no_image' | 'zero_price' | 'low_margin' | 'no_description'
                        (overlay filter triggered from Dashboard health chips)
@@ -465,12 +465,12 @@ class DatabaseManager:
         count_stmt = select(func.count()).select_from(products_table)
 
         conditions = []
-        if filter_mode == "Activos":
+        if filter_mode == "Active":
             conditions.append(products_table.c.active == True)
             conditions.append(products_table.c.discontinued == False)
-        elif filter_mode == "Inactivos":
+        elif filter_mode == "Inactive":
             conditions.append(products_table.c.active == False)
-        elif filter_mode == "Discontinuados":
+        elif filter_mode == "Discontinued":
             conditions.append(products_table.c.discontinued == True)
 
         if search:
