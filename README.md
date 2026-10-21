@@ -67,7 +67,7 @@ It is currently deployed in production for an Argentinean wholesale business and
 ### Output generation
 - **Branded PDF catalog** with cover page, category dividers, configurable product grid (1/2/3 per row), and per-page headers/footers
 - **Excel export** with two sheets: a clean product sheet and a "System" sheet with audit metadata and integrity flags
-- All branding (company name, logo placeholders, color palette) configurable from the UI
+- Branding (company name, tagline, primary and secondary colors, products per row) configurable from the UI, with a live preview
 
 ### UX polish
 - Dashboard with live health metrics, recent-activity feed, and a last-import summary card
