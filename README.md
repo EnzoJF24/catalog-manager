@@ -1,6 +1,6 @@
 # Catalog Manager
 
-> Desktop application that automates the full pipeline from supplier price-list PDFs to customer-ready commercial catalogs — extraction, pricing, editing, and publishing in one tool.
+> Desktop application that turns supplier price-list PDFs into priced Excel/CSV price lists and branded PDF catalogs — extraction, pricing, editing, and publishing in one tool.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/tests-59%20passing-brightgreen.svg)](#testing)
@@ -372,5 +372,6 @@ Python developer · Buenos Aires, Argentina
 
 - Email: enzofulcheri@gmail.com
 - GitHub: [@EnzoJF24](https://github.com/EnzoJF24)
+- Upwork: [Enzo Javier F.](https://www.upwork.com/freelancers/~01a6985f1b44464d36)
 
-Available for freelance work — desktop applications, document-processing pipelines, business-automation tools.
+Available for freelance work — PDF price lists and catalogs to Excel, CSV or branded PDF catalogs, plus desktop applications and business-automation tools. [Hire me on Upwork](https://www.upwork.com/freelancers/~01a6985f1b44464d36).
