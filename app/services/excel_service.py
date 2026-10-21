@@ -11,6 +11,7 @@ Excel service v3:
                          Accepts both English headers and the legacy Spanish ones.
 """
 from __future__ import annotations
+import csv
 import re
 import zipfile
 from datetime import datetime
@@ -161,29 +162,8 @@ class ExcelService:
         round_to: int = 0,
         suffix: str = "",
     ) -> Path:
-        rows = self.db.get_all_products(include_inactive=True)
-        if not rows:
-            raise ValueError("There are no products in the database.")
-
-        if active_only:
-            rows = [r for r in rows if r.get("active")]
-        if not include_discontinued:
-            rows = [r for r in rows if not r.get("discontinued")]
-        if not rows:
-            raise ValueError("No products match the filter criteria.")
-
-        rows.sort(key=lambda r: (r.get("category") or "", r.get("sku") or ""))
-
-        if filename:
-            out_path = self.output_dir / filename
-        else:
-            base     = f"catalog_{datetime.now().strftime('%Y-%m-%d')}"
-            out_path = self.output_dir / f"{base}.xlsx"
-            # If a file with that date already exists, append _2, _3, … to avoid overwrite
-            n = 2
-            while out_path.exists():
-                out_path = self.output_dir / f"{base}_{n}.xlsx"
-                n += 1
+        rows     = self._select_rows(active_only, include_discontinued)
+        out_path = self._output_path(filename, ".xlsx")
 
         wb = Workbook()
         ws1 = wb.active
@@ -198,6 +178,69 @@ class ExcelService:
         sku_col = get_column_letter(COL_SKU)
         _ignore_number_as_text(out_path, f"{sku_col}3:{sku_col}{len(rows) + 2}")
         log.info(f"Excel generated: {out_path} ({len(rows)} rows)")
+        return out_path
+
+    def generate_csv(
+        self,
+        filename: Optional[str] = None,
+        active_only: bool = False,
+        include_discontinued: bool = False,
+    ) -> Path:
+        """
+        Same columns as the Products sheet, as plain CSV for importing into
+        other systems: UTF-8 with BOM (so Excel reads accents correctly),
+        comma-separated, numbers with a dot decimal and no currency symbol.
+        """
+        rows     = self._select_rows(active_only, include_discontinued)
+        out_path = self._output_path(filename, ".csv")
+
+        def _num(v) -> str:
+            return f"{round(v or 0.0, 2):.2f}"
+
+        with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(HEADERS_USER)
+            for r in rows:
+                writer.writerow([
+                    "YES" if r.get("active", True) else "NO",
+                    r.get("sku", ""),
+                    r.get("brand") or "",
+                    r.get("description") or "",
+                    r.get("category") or "",
+                    _num(r.get("price_original")),
+                    _num(r.get("margin_pct")),
+                    _num(r.get("iva_pct")),
+                    _num(r.get("price_final")),
+                    r.get("notes") or "",
+                ])
+        log.info(f"CSV generated: {out_path} ({len(rows)} rows)")
+        return out_path
+
+    def _select_rows(self, active_only: bool, include_discontinued: bool) -> list[dict]:
+        rows = self.db.get_all_products(include_inactive=True)
+        if not rows:
+            raise ValueError("There are no products in the database.")
+
+        if active_only:
+            rows = [r for r in rows if r.get("active")]
+        if not include_discontinued:
+            rows = [r for r in rows if not r.get("discontinued")]
+        if not rows:
+            raise ValueError("No products match the filter criteria.")
+
+        rows.sort(key=lambda r: (r.get("category") or "", r.get("sku") or ""))
+        return rows
+
+    def _output_path(self, filename: Optional[str], ext: str) -> Path:
+        if filename:
+            return self.output_dir / filename
+        base     = f"catalog_{datetime.now().strftime('%Y-%m-%d')}"
+        out_path = self.output_dir / f"{base}{ext}"
+        # If a file with that date already exists, append _2, _3, … to avoid overwrite
+        n = 2
+        while out_path.exists():
+            out_path = self.output_dir / f"{base}_{n}{ext}"
+            n += 1
         return out_path
 
     # ── Sheet 1 ───────────────────────────────────────────────────────────────

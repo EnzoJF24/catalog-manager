@@ -3,11 +3,11 @@
 > Desktop application that automates the full pipeline from supplier price-list PDFs to customer-ready commercial catalogs — extraction, pricing, editing, and publishing in one tool.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-58%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-59%20passing-brightgreen.svg)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#)
 
-A production-grade Python desktop application built for a wholesale distribution business. It ingests 400+ page supplier PDFs, extracts thousands of products and their images, applies pricing rules (margins, tax, rounding), and produces both an editable Excel snapshot and a polished, customer-facing PDF catalog — all from a single dark-mode UI.
+A production-grade Python desktop application built for a wholesale distribution business. It ingests 400+ page supplier PDFs, extracts thousands of products and their images, applies pricing rules (margins, tax, rounding), and produces an editable Excel snapshot, a plain CSV for other systems, and a polished, customer-facing PDF catalog — all from a single dark-mode UI.
 
 ![Demo — importing a supplier PDF and populating the catalog](docs/screenshots/00_demo.gif)
 
@@ -67,6 +67,7 @@ It is currently deployed in production for an Argentinean wholesale business and
 ### Output generation
 - **Branded PDF catalog** with cover page, category dividers, configurable product grid (1/2/3 per row), and per-page headers/footers
 - **Excel export** with two sheets: a clean product sheet and a "System" sheet with audit metadata and integrity flags
+- **CSV export** with the same columns, UTF-8, dot decimals and no currency symbols — ready to import into an ERP, e-commerce store or database
 - Branding (company name, tagline, primary and secondary colors, products per row) configurable from the UI, with a live preview
 
 ### UX polish
@@ -140,7 +141,7 @@ so the same pipeline serves suppliers in either market.
 | Excel I/O | openpyxl with styled cells and data validation |
 | Settings | Pydantic v2 + pydantic-settings |
 | Logging | Loguru with rotating files |
-| Testing | Pytest (58 tests covering business logic and parsers) |
+| Testing | Pytest (59 tests covering business logic and parsers) |
 | Packaging | PyInstaller spec included for single-file Windows distribution |
 
 ---
@@ -234,7 +235,8 @@ The **Products** tab lets you:
 ### 3 — Publish
 
 From the **Catalog** tab:
-- **Download Excel** — produces a styled, two-sheet workbook (Products + System metadata)
+- **Export Excel** — produces a styled, two-sheet workbook (Products + System metadata)
+- **Export CSV** — the same product columns as plain CSV
 - **Generate PDF** — produces a branded multi-page catalog with cover, category dividers, and a 1/2/3-column product grid
 
 ---
@@ -292,7 +294,7 @@ The suite covers the business-critical paths:
   becomes a product, almost every product gets a photo) — skipped
   automatically when the PDF is not present, since source PDFs are git-ignored
 
-All 58 tests pass on every commit.
+All 59 tests pass on every commit.
 
 ---
 

@@ -23,7 +23,7 @@ from app.ui.theme import (
 )
 
 _TAB_PDF   = "PDF catalogs"
-_TAB_EXCEL = "Excel exports"
+_TAB_EXCEL = "Excel & CSV"
 
 
 def _human_size(n: int) -> str:
@@ -95,7 +95,7 @@ class FileCard(ctk.CTkFrame):
 
 class FilesFrame(ctk.CTkFrame):
     """
-    Lists every generated PDF and Excel file.
+    Lists every generated PDF, Excel and CSV file.
     Each one can be opened, shown in its folder or deleted.
     """
 
@@ -160,7 +160,7 @@ class FilesFrame(ctk.CTkFrame):
             w.destroy()
 
         folder = self._current_folder()
-        exts   = {".pdf"} if self._tab == "pdf" else {".xlsx", ".xls"}
+        exts   = {".pdf"} if self._tab == "pdf" else {".xlsx", ".xls", ".csv"}
         files = sorted(
             [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in exts],
             key=lambda f: f.stat().st_mtime,

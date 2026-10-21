@@ -328,6 +328,20 @@ class TestExcelService:
         n = len(sample_product_list)
         assert f'<ignoredError sqref="B3:B{n + 2}" numberStoredAsText="1"/>' in xml
 
+    def test_generate_csv(self, excel_svc, db, sample_product_list):
+        self._populate_db(db, sample_product_list)
+        path = excel_svc.generate_csv()
+        assert path.suffix == ".csv"
+        import csv
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            rows = list(csv.reader(f))
+        assert rows[0][:4] == ["Active", "SKU", "Brand", "Description"]
+        assert len(rows) == len(sample_product_list) + 1
+        # Plain numbers: dot decimal, no currency symbol or thousands separator
+        cost, final = rows[1][5], rows[1][8]
+        assert "$" not in final and "," not in final
+        assert float(final) > 0 and "." in cost
+
     def test_generate_excel_empty_db_raises(self, excel_svc, db):
         with pytest.raises(ValueError, match="no products"):
             excel_svc.generate_excel()

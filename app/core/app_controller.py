@@ -115,6 +115,20 @@ class AppController:
         )
         return path
 
+    def export_csv(self, active_only: bool = False) -> Path:
+        path = self.excel_svc.generate_csv(active_only=active_only)
+        try:
+            n = len(self.db.get_all_products(include_inactive=not active_only))
+        except Exception:
+            n = 0
+        self.db.log_activity(
+            kind="excel",
+            summary=f"Exported CSV · {n:,} products" + (" (active only)" if active_only else ""),
+            count=n,
+            metadata={"file": path.name},
+        )
+        return path
+
     def reimport_excel(self, excel_path: str) -> dict:
         result = self.excel_svc.reimport_excel(Path(excel_path))
         self._mark_db_modified()

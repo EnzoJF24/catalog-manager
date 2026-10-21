@@ -192,7 +192,7 @@ class ExcelFrame(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=0)
         self.grid_rowconfigure(3, weight=1)
 
-        head = page_header(self, "Catalog", "Export the price list to Excel or publish the PDF catalog.")
+        head = page_header(self, "Catalog", "Export the price list to Excel or CSV, or publish the PDF catalog.")
         head.grid(row=0, column=0, columnspan=2, padx=PAGE_PADX, pady=(26, 18), sticky="ew")
         actions = ctk.CTkFrame(head, fg_color="transparent")
         actions.grid(row=0, column=1, rowspan=2, sticky="e")
@@ -206,9 +206,12 @@ class ExcelFrame(ctk.CTkFrame):
         self._export_btn = secondary_button(actions, "Export Excel", self._export,
                                             icon=icon("sheet", TEXT_HEADING, 15), width=130)
         self._export_btn.grid(row=0, column=1, padx=(0, 8))
+        self._csv_btn = secondary_button(actions, "Export CSV", self._export_csv,
+                                         icon=icon("sheet", TEXT_HEADING, 15), width=120)
+        self._csv_btn.grid(row=0, column=2, padx=(0, 8))
         self._pdf_btn = primary_button(actions, "Generate PDF", self._gen_pdf,
                                        icon=icon("file_text", "#FFFFFF", 15), width=140)
-        self._pdf_btn.grid(row=0, column=2)
+        self._pdf_btn.grid(row=0, column=3)
 
         # ── Status strip ─────────────────────────────────────────────────────
         self._status_bar = card(self, row=1, column=0, columnspan=2, padx=PAGE_PADX, pady=(0, 12), sticky="ew")
@@ -359,6 +362,33 @@ class ExcelFrame(ctk.CTkFrame):
         if open_now:
             _open_file(path)
 
+    # ── Export CSV ────────────────────────────────────────────────────────────
+
+    def _export_csv(self):
+        self._set_busy(True)
+        self._action_spinner.start("Generating CSV…")
+
+        def _run():
+            try:
+                path = self.controller.export_csv(self.active_only_var.get())
+                self.after(0, lambda p=path: self._csv_done(p))
+            except Exception as e:
+                self.after(0, lambda err=str(e): self._generic_error("CSV", err))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _csv_done(self, path: Path):
+        self._action_spinner.stop()
+        self._set_busy(False)
+        self._refresh_status()
+        self._log(f"CSV saved     {settings.display_path(path)}")
+        open_now = messagebox.askyesno(
+            "CSV generated",
+            f"File saved to:\n{path}\n\nOpen it now?",
+        )
+        if open_now:
+            _open_file(path)
+
     # ── Generate PDF ──────────────────────────────────────────────────────────
 
     def _gen_pdf(self):
@@ -398,6 +428,7 @@ class ExcelFrame(ctk.CTkFrame):
     def _set_busy(self, busy: bool):
         state = "disabled" if busy else "normal"
         self._export_btn.configure(state=state)
+        self._csv_btn.configure(state=state)
         self._pdf_btn.configure(state=state)
         if busy:
             self._lbl_status.configure(text="")
