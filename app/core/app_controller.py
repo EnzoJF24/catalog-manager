@@ -122,7 +122,7 @@ class AppController:
         except Exception:
             n = 0
         self.db.log_activity(
-            kind="excel",
+            kind="csv",
             summary=f"Exported CSV · {n:,} products" + (" (active only)" if active_only else ""),
             count=n,
             metadata={"file": path.name},

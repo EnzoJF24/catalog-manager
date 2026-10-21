@@ -12,8 +12,8 @@ A production-grade Python desktop application built for a wholesale distribution
 ![Demo — importing a supplier PDF and populating the catalog](docs/screenshots/00_demo.gif)
 
 > End-to-end flow on a 44-page US wholesale price list: 1,301 products and
-> their photos imported in 3.5 s, priced with a 30% margin, and published as
-> an Excel price list plus a 129-page branded PDF catalog.
+> their photos imported in under 4 seconds, priced with a 30% margin, and
+> published as an Excel price list, a CSV and a 129-page branded PDF catalog.
 
 ---
 
@@ -107,16 +107,25 @@ It is currently deployed in production for an Argentinean wholesale business and
 ### Catalog generation
 ![Catalog](docs/screenshots/03_catalog.png)
 
-> The status badge tracks Excel/PDF staleness against the database. Company
-> name, tagline, colors and product-grid density are configurable, with a live
-> preview of the page layout.
+> Export the price list to Excel or CSV, or publish the PDF catalog. The status
+> badge tracks Excel staleness against the database. Company name, tagline,
+> colors and product-grid density are configurable, with a live preview of the
+> page layout.
 
 ### Generated PDF output
 ![PDF Output](docs/screenshots/04_pdf_output.png)
 
-> A page from the generated 129-page catalog: branded header, 3×3 product grid
-> with photos, SKUs, brands, descriptions and final prices in USD. Categories
-> become section dividers across pages. The reseller name is fictitious.
+> A page from the generated 129-page catalog: branded header, 3-column product
+> grid with photos, SKUs, brands, descriptions and final prices in USD.
+> Categories become section dividers across pages. The reseller name is
+> fictitious.
+
+### Excel export
+![Excel export](docs/screenshots/06_excel_export.png)
+
+> The Products sheet: cost, margin, tax and final price per SKU, with filters
+> on every column. SKUs are kept as text so leading zeros survive. The same
+> columns are available as a plain CSV.
 
 ---
 
@@ -316,7 +325,7 @@ Reference numbers on two real supplier PDFs (Intel i5, SSD):
 
 | Stage | Result |
 |-------|--------|
-| Full import (detection, extraction, photos, pricing, save) | 3.5 s |
+| Full import (detection, extraction, photos, pricing, save) | 2–4 s |
 | Products matched to a photo | 1,296 of 1,301 (99.6%) |
 | Branded PDF catalog | 129 pages, ~10 s |
 

@@ -68,6 +68,7 @@ ACTIVITY_ICON: dict[str, str] = {
     "import":       "upload",
     "edit_batch":   "edit",
     "excel":        "sheet",
+    "csv":          "sheet",
     "pdf":          "file_text",
     "margin_apply": "percent",
 }
