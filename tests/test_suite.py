@@ -319,6 +319,15 @@ class TestExcelService:
         headers = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
         assert "Image" not in headers, "Image must not be on the Products sheet"
 
+    def test_generate_excel_ignores_sku_number_as_text(self, excel_svc, db, sample_product_list):
+        self._populate_db(db, sample_product_list)
+        path = excel_svc.generate_excel()
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        n = len(sample_product_list)
+        assert f'<ignoredError sqref="B3:B{n + 2}" numberStoredAsText="1"/>' in xml
+
     def test_generate_excel_empty_db_raises(self, excel_svc, db):
         with pytest.raises(ValueError, match="no products"):
             excel_svc.generate_excel()

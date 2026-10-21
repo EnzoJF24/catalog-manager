@@ -11,6 +11,8 @@ Excel service v3:
                          Accepts both English headers and the legacy Spanish ones.
 """
 from __future__ import annotations
+import re
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -115,6 +117,28 @@ def _cell(ws, row: int, col: int):
     return ws.cell(row=row, column=col)
 
 
+def _ignore_number_as_text(xlsx_path: Path, sqref: str, sheet: str = "xl/worksheets/sheet1.xml"):
+    """
+    SKUs are stored as text on purpose (keeps leading zeros). openpyxl 3.1
+    does not write <ignoredErrors>, so inject it into the saved sheet XML to
+    stop Excel from flagging every SKU as "number stored as text".
+    """
+    tmp_path = xlsx_path.with_suffix(".tmp")
+    element  = f'<ignoredErrors><ignoredError sqref="{sqref}" numberStoredAsText="1"/></ignoredErrors>'
+    with zipfile.ZipFile(xlsx_path) as src, \
+         zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == sheet:
+                xml = data.decode("utf-8")
+                # Schema order: ignoredErrors goes before these, else before </worksheet>
+                anchor = re.search(r"<(drawing|legacyDrawing|tableParts|extLst)\b|</worksheet>", xml)
+                xml  = xml[:anchor.start()] + element + xml[anchor.start():]
+                data = xml.encode("utf-8")
+            dst.writestr(item, data)
+    tmp_path.replace(xlsx_path)
+
+
 def _safe_text(value):
     """Strip control characters openpyxl refuses to write (e.g. NUL from PDF text)."""
     return ILLEGAL_CHARACTERS_RE.sub("", value) if isinstance(value, str) else value
@@ -171,6 +195,8 @@ class ExcelService:
         self._write_system_sheet(ws2, rows, round_to, suffix)
 
         wb.save(str(out_path))
+        sku_col = get_column_letter(COL_SKU)
+        _ignore_number_as_text(out_path, f"{sku_col}3:{sku_col}{len(rows) + 2}")
         log.info(f"Excel generated: {out_path} ({len(rows)} rows)")
         return out_path
 

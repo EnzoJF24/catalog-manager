@@ -3,7 +3,7 @@ Application settings using Pydantic Settings.
 Supports .env file and environment variables.
 """
 from pathlib import Path
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.config.branding import (
     APP_NAME, APP_VERSION,
     COMPANY_NAME, COMPANY_SLOGAN,
@@ -47,10 +47,11 @@ class AppSettings(BaseSettings):
     PRIMARY_COLOR: str = PRIMARY_COLOR
     SECONDARY_COLOR: str = SECONDARY_COLOR
 
-    class Config:
-        env_file = BASE_DIR / ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=BASE_DIR / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     def ensure_dirs(self):
         """Create all required directories."""

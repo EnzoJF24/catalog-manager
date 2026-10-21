@@ -3,7 +3,7 @@
 > Desktop application that automates the full pipeline from supplier price-list PDFs to customer-ready commercial catalogs — extraction, pricing, editing, and publishing in one tool.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-58%20passing-brightgreen.svg)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#)
 
@@ -140,7 +140,7 @@ so the same pipeline serves suppliers in either market.
 | Excel I/O | openpyxl with styled cells and data validation |
 | Settings | Pydantic v2 + pydantic-settings |
 | Logging | Loguru with rotating files |
-| Testing | Pytest (57 tests covering business logic and parsers) |
+| Testing | Pytest (58 tests covering business logic and parsers) |
 | Packaging | PyInstaller spec included for single-file Windows distribution |
 
 ---
@@ -292,7 +292,7 @@ The suite covers the business-critical paths:
   becomes a product, almost every product gets a photo) — skipped
   automatically when the PDF is not present, since source PDFs are git-ignored
 
-All 57 tests pass on every commit.
+All 58 tests pass on every commit.
 
 ---
 
