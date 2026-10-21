@@ -368,9 +368,12 @@ class TestExcelService:
         assert p["active"] is False
 
     def test_reimport_missing_sku_column(self, excel_svc, tmp_dir):
-        import pandas as pd
+        from openpyxl import Workbook
         bad_excel = tmp_dir / "bad.xlsx"
-        pd.DataFrame({"Wrong": [1, 2]}).to_excel(str(bad_excel), index=False)
+        wb = Workbook()
+        for row in (["Wrong"], [1], [2]):
+            wb.active.append(row)
+        wb.save(str(bad_excel))
         results = excel_svc.reimport_excel(bad_excel)
         assert len(results["errors"]) > 0
 
